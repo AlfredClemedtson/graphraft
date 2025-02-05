@@ -1,7 +1,8 @@
 import re
 
 def cypher2path(cypher_query: str) -> list[tuple[str, str, str, str]]:
-    path = re.findall(r"(?:\(|-\[)(x|r)(\d):([^ \)\]]+)(?: \{name: \"(.+)\"\})?(?:\)|\]-)", cypher_query)
+    #path = re.findall(r"(?:\(|-\[)(x|r)(\d):([^ \)\]]+)(?: \{name: \"(.+)\"\})?(?:\)|\]-)", cypher_query)
+    path = re.findall(r"(?:\(|-\[)(x|r)(\d):([^ \)\]]+)(?: \{name: \"([^\"]+)\"\})?(?:\)|\]-)", cypher_query)
     return path
 
 def block2cypher(x_r: str, num: str, label_or_type: str, name: str) -> str:

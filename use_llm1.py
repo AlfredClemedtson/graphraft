@@ -8,7 +8,7 @@ from transformers import (
 )
 from datasets import DatasetDict, load_from_disk
 
-from cypher_parsing import cypher2path
+from cypher_parsing import cypher2path, block2cypher
 
 
 def get_options(current_path: list[tuple[str, str, str, str]],

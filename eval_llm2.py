@@ -17,15 +17,12 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 )
 tokenizer.padding = True
 
-qa_with_train_prompts = load_from_disk('prime-data/qa_with_train_prompts')
+model = FastLanguageModel.for_inference(model)
 
-# Test inference
-FastLanguageModel.for_inference(model)
-prompt = qa_with_train_prompts['valid'][0]['text']
-inputs = tokenizer(prompt, return_tensors='pt', padding=True, truncation=True).to("cuda")
-outputs = model.generate(**inputs, min_new_tokens=10, max_new_tokens=150, num_return_sequences=1)
-text = tokenizer.decode(outputs[0])
-print(text)
+qa_with_eval_prompts = load_from_disk('prime-data/qa_with_eval_prompts')
+
+
+
 
 def compute_metrics(predss: list[str], labelss: list[str]) -> dict[str, np.float32]:
     def f1(preds, labels) -> float:
@@ -34,19 +31,22 @@ def compute_metrics(predss: list[str], labelss: list[str]) -> dict[str, np.float
         rec = true_pos / len(labels)
         return 2 * prec * rec / (prec + rec) if prec > 0 else 0
 
+    hits_at_ones =
     true_poss = [len(set(preds).intersection(labels)) for preds, labels in zip(predss, labelss)]
     metrics = {
         'avg_f1' : np.mean([(f1(preds, labels)) for preds, labels in zip(predss, labelss)]),
         'avg_prec' : np.mean([true_pos/len(preds) for preds, true_pos in zip(predss, true_poss)]),
         'avg_rec' : np.mean([true_pos/len(labels) for labels, true_pos in zip(labelss, true_poss)]),
-        'avg_hits_at_1' : np.mean([1 if true_pos > 0 else 0 for true_pos in true_poss]),
+        'avg_hits_at_1' : np.mean([1 if preds[0] in set(labels) else 0 for preds, labels in zip(predss, labelss)]),
         'avg_num_preds' : np.mean([len(preds) for preds in predss])
     }
-    return metrics
+    metrics_string = f"Avg f1: {metrics['avg_f1']:.3f}, Avg prec: {metrics['avg_prec']:.3f}, Avg rec: {metrics['avg_rec']:.3f}, "\
+                     f"Hits@1: {metrics['avg_hits_at_1']:.3f}, Avg preds: {metrics['avg_num_preds']}"
+    return metrics, metrics_string
 
 predss = []; labelss = []
 with tqdm() as pbar:
-    for data in qa_with_train_prompts['valid']:
+    for data in qa_with_eval_prompts['valid']:
         answers = data['answer']
         prompt = data['text']
         inputs = tokenizer(prompt, return_tensors='pt').to("cuda")
@@ -58,14 +58,9 @@ with tqdm() as pbar:
         except:
             predss.append([])
         labelss.append(answers.split('|'))
-        metrics = compute_metrics(predss, labelss)
-
-        pbar.set_description(
-            f"Avg f1: {metrics['avg_f1']:.3f}, Avg prec: {metrics['avg_prec']:.3f}, Avg rec: {metrics['avg_rec']:.3f}, "
-            f"Hits@1: {metrics['avg_hits_at_1']:.3f}, Avg preds: {metrics['avg_num_preds']}")
+        _, metrics_string = compute_metrics(predss, labelss)
+        pbar.set_description(metrics_string)
         pbar.update(1)
 
-
-metrics = compute_metrics(predss, labelss)
-print(f"Avg f1: {metrics['avg_f1']:.3f}, Avg prec: {metrics['avg_prec']:.3f}, Avg rec: {metrics['avg_rec']:.3f} "
-      f"Hits@1: {metrics['avg_hits_at_1']:.3f}, Avg preds: {metrics['avg_num_preds']}")
+_, metrics_string = compute_metrics(predss, labelss)
+print(metrics_string)
