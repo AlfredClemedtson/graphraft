@@ -10,8 +10,7 @@ from datasets import load_from_disk
 from peft import LoraConfig, PeftModel, get_peft_model
 from trl import SFTConfig, SFTTrainer
 
-from llm2 import add_ranked_sequences
-from logits_processor import MyLogitsProcessor
+from sequence_ranker import SequenceRanker
 
 # PAD_TOKEN = ... #? what's best?
 START_OF_GENERATION_TOKENS = "<start_of_turn>assistant\n"
@@ -40,46 +39,22 @@ def formatting_func(data: dict, add_label=True) -> str:  # Not used yet
     return prompt
 
 
-def predict_cyphers(data: dict, model: AutoModelForCausalLM, tokenizer: PreTrainedTokenizerBase, device,
-                    beam_width: int) -> list[str]:
-    possible_queries = data['cyphers']
-    beam_width = min(beam_width, len(possible_queries))
-    max_new_tokens = max([len(tokenizer.tokenize(query)) + 10 for query in possible_queries])
-    generation_config = GenerationConfig(num_return_sequences=beam_width, num_beams=beam_width,
-                                         max_new_tokens=max_new_tokens, early_stopping=True, do_sample=False,
-                                         remove_invalid_values=True)
-    allowed_queries_ids = [
-        tokenizer(query + END_OF_GENERATION_TOKEN, add_special_tokens=False, return_tensors="pt").input_ids.to(device)
-        for query in possible_queries]
-    starting_ids = tokenizer(START_OF_GENERATION_TOKENS, add_special_tokens=False, return_tensors="pt").input_ids[0].to(device)
-    end_token_id = tokenizer(END_OF_GENERATION_TOKEN, add_special_tokens=False, return_tensors="pt").input_ids[0].to(device)
-    logits_processor = MyLogitsProcessor(allowed_queries_ids=allowed_queries_ids, starting_ids=starting_ids, end_token_id=end_token_id)
-
+def add_predicted_cypher(data: dict, beam_width: int, sequence_ranker: SequenceRanker, print_options=[],) -> dict:
     prompt = formatting_func(data=data, add_label=False)
-    tokenized_question = tokenizer(prompt, return_tensors="pt").to(device)
-    outputs = model.generate(**tokenized_question, generation_config=generation_config,
-                             logits_processor=[logits_processor])
-    decoded_outputs = tokenizer.batch_decode(outputs, skip_special_tokens=False)
-    top_cypher_queries = [text.split(START_OF_GENERATION_TOKENS)[-1].split(END_OF_GENERATION_TOKEN)[0] for text in
-                          decoded_outputs]
-    return top_cypher_queries
+    possible_sequences = data['cyphers']
+    data['top_cypher_queries'] = sequence_ranker.rank_sequences(prompt=prompt, possible_sequences=possible_sequences, max_beam_width=beam_width)
 
-
-def add_predicted_cypher(data: dict, device, model: AutoModelForCausalLM, tokenizer: PreTrainedTokenizerBase,
-                         beam_width: int, print_options=[]) -> dict:
-    data['top_cyphers'] = predict_cyphers(data=data, model=model, tokenizer=tokenizer, device=device,
-                                          beam_width=beam_width)
     if 'summary' in print_options:
-        print(f"Top cyphers: {data['top_cyphers']}\n"
+        print(f"Top cyphers: {data['top_cypher_queries']}\n"
               f"Total #cyphers:     {len(data['cyphers'])}\n"
-              f"Generated #cyphers: {len(data['top_cyphers'])}\n"
-              f"Gen valid #cyphers: {len(set(data['top_cyphers']).intersection(data['cyphers']))}\n")
+              f"Generated #cyphers: {len(data['top_cypher_queries'])}\n"
+              f"Gen valid #cyphers: {len(set(data['top_cypher_queries']).intersection(data['cyphers']))}\n")
 
     if 'add_details' in print_options:
         sorted_data = sort_cyphers(data)
         max_recall = 0
         print(f"Question: {data['question']}")
-        for top_cypher in data['top_cyphers']:
+        for top_cypher in data['top_cypher_queries']:
             try:
                 i = sorted_data['cyphers'].index(top_cypher)
                 precision = sorted_data['hits'][i] / sorted_data['num_results'][i]
@@ -108,7 +83,6 @@ def add_predicted_cypher(data: dict, device, model: AutoModelForCausalLM, tokeni
 def train(model: AutoModelForCausalLM, tokenizer: PreTrainedTokenizerBase, train_dataset: Dataset,
           eval_dataset: Dataset, model_save_dir: str):
     # Load data
-
     max_seq_len = max([len(tokenizer.encode(x['text'])) for x in train_dataset]) + 10
 
     sft_config = SFTConfig(auto_find_batch_size=True,
@@ -160,7 +134,10 @@ def main():
 
     model_dir = args.model_dir
     adapter_dir = args.adapter_dir
-    model_save_dir = args.model_save_dir
+    if args.model_save_dir is None:
+        model_save_dir = f"./output-{int(time.time())}"
+    else:
+        model_save_dir = args.model_save_dir
 
     if args.data_dir is None:
         if do_train and args.train_data_dir is None:
@@ -216,29 +193,29 @@ def main():
         qa_with_supervised_prompts_valid = load_from_disk(valid_data_dir) \
             .filter(lambda x: best_label_is_good(x, lowest_recall=1, lowest_precision=.1)) \
             .map(lambda x: x | {'text': formatting_func(x, add_label=True)})
-        model_save_dir = f"./output-{time.time()}" if model_save_dir is None else model_save_dir
         train(model=model, tokenizer=tokenizer, train_dataset=qa_with_supervised_prompts_train,
               eval_dataset=qa_with_supervised_prompts_valid, model_save_dir=model_save_dir)
 
     # Put into inference mode? No grad, padding side: left?
+    sequence_ranker = SequenceRanker(model, tokenizer, device, START_OF_GENERATION_TOKENS, END_OF_GENERATION_TOKEN)
+
     if do_evaluate:
         qa_with_cyphers = load_from_disk(valid_data_dir)
         qa_with_evaluation_result = qa_with_cyphers\
             .filter(lambda _, i: i < int(len(qa_with_cyphers) * eval_fraction), with_indices=True) \
-            .map(lambda data: add_predicted_cypher(data, device, model, tokenizer, beam_width,
+            .map(lambda data: add_predicted_cypher(data, sequence_ranker=sequence_ranker, beam_width=beam_width,
                                                    print_options=['add_details', 'gpu_info']))
-        print(
-            f"Avg recall@1: {np.mean(qa_with_evaluation_result['predicted_recall_at_1']):.2f}    Avg top recall of 5: {np.mean(qa_with_evaluation_result['predicted_max_recall'])}    Avg #nodes@1 {np.mean(qa_with_evaluation_result['num_nodes_at_1'])}")
-        eval_save_dir = "prime-data/qa_with_eval_cyphers" if eval_save_dir is None else eval_save_dir
+        print(f"Avg recall@1: {np.mean(qa_with_evaluation_result['predicted_recall_at_1']):.2f}    "
+              f"Avg top recall of 5: {np.mean(qa_with_evaluation_result['predicted_max_recall'])}    "
+              f"Avg #nodes@1 {np.mean(qa_with_evaluation_result['num_nodes_at_1'])}")
         qa_with_evaluation_result.save_to_disk(eval_save_dir)
 
     if do_generate:
         # Generate cypher queries for all questions
         qa_with_train_cyphers = load_from_disk(gen_data_dir)
-        qa_with_gen_cyphers = qa_with_train_cyphers.map(
-            lambda data: add_predicted_cypher(data, device=device, model=model, tokenizer=tokenizer,
-                                              beam_width=beam_width, print_options=['summary'])
-        )
+        qa_with_gen_cyphers = qa_with_train_cyphers \
+            .map(lambda data: add_predicted_cypher(data, sequence_ranker=sequence_ranker, beam_width=beam_width,
+                                                   print_options=['summary']))
         qa_with_gen_cyphers.save_to_disk(gen_save_dir)
 
 

@@ -14,8 +14,8 @@ class SequenceRanker:
         self.starting_ids = tokenizer(start_of_generation_tokens, add_special_tokens=False, return_tensors="pt").input_ids[0].to(device)
         self.end_token_id = tokenizer(end_of_generation_token, add_special_tokens=False, return_tensors="pt").input_ids[0].to(device)
 
-    def rank_sequences(self, prompt: str, possible_sequences: str, beam_width: int) -> list[str]:
-        beam_width = min(beam_width, len(possible_sequences))
+    def rank_sequences(self, prompt: str, possible_sequences: str, max_beam_width: int) -> list[str]:
+        beam_width = min(max_beam_width, len(possible_sequences))
         max_new_tokens = max([len(self.tokenizer.tokenize(sequence))+10 for sequence in possible_sequences])
         generation_config = GenerationConfig(num_return_sequences=beam_width, num_beams=beam_width, #early_stopping=True
                                              do_sample=False, max_new_tokens=max_new_tokens,)
