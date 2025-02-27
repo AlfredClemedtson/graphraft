@@ -27,7 +27,7 @@ def sort_cyphers(data: dict) -> dict:
 def best_label_is_good(data: dict, lowest_recall=1, lowest_precision=.1) -> bool:
     sorted_data = sort_cyphers(data)
     recall = sorted_data['hits'][0] / sorted_data['num_results'][0]
-    precision = sorted_data['hits'][0] / len(eval(sorted_data['answer_ids']))
+    precision = sorted_data['hits'][0] / len(sorted_data['answer_ids'])
     return recall >= lowest_recall and precision >= lowest_precision
 
 
@@ -58,7 +58,7 @@ def add_predicted_cypher(data: dict, beam_width: int, sequence_ranker: SequenceR
             try:
                 i = sorted_data['cyphers'].index(top_cypher)
                 precision = sorted_data['hits'][i] / sorted_data['num_results'][i]
-                recall = sorted_data['hits'][i] / len(eval(data['answer_ids']))
+                recall = sorted_data['hits'][i] / len(data['answer_ids'])
                 if 'predicted_recall_at_1' not in data.keys():
                     data['rank@1'] = i + 1
                     data['num_nodes_at_1'] = sorted_data['num_results'][i]
@@ -135,7 +135,7 @@ def main():
     model_dir = args.model_dir
     adapter_dir = args.adapter_dir
     if args.model_save_dir is None:
-        model_save_dir = f"./output-{int(time.time())}"
+        model_save_dir = f"./llm1-{int(time.time())}"
     else:
         model_save_dir = args.model_save_dir
 
