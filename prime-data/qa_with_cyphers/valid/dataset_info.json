@@ -11,8 +11,11 @@
       "_type": "Value"
     },
     "answer_ids": {
-      "dtype": "string",
-      "_type": "Value"
+      "feature": {
+        "dtype": "int64",
+        "_type": "Value"
+      },
+      "_type": "Sequence"
     },
     "predicted_entities": {
       "feature": {
