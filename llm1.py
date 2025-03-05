@@ -26,8 +26,8 @@ def sort_cyphers(data: dict) -> dict:
 
 def best_label_is_good(data: dict, lowest_recall=1, lowest_precision=.1) -> bool:
     sorted_data = sort_cyphers(data)
-    recall = sorted_data['hits'][0] / sorted_data['num_results'][0]
-    precision = sorted_data['hits'][0] / len(sorted_data['answer_ids'])
+    precision = sorted_data['hits'][0] / sorted_data['num_results'][0]
+    recall = sorted_data['hits'][0] / len(sorted_data['answer_ids'])
     return recall >= lowest_recall and precision >= lowest_precision
 
 
