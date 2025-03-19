@@ -16,6 +16,8 @@ def compute_metrics(predss: list[list[int]], labelss: list[list[int]], metrics: 
                 result = _macro_average(_hit, predss, labelss, eval(k))
             case ["mrr"]:
                 result = _macro_average(_mrr, predss, labelss)
+            case ["num_nodes"]:
+                result = _macro_average(_cnt, predss, labelss)
             case _:
                 print(f"{metric} is not a valid metric")
                 result = float("nan")
@@ -26,6 +28,8 @@ def compute_metrics(predss: list[list[int]], labelss: list[list[int]], metrics: 
             print(f"{metric.ljust(max_length)}: {value:.3f}")
     return results
 
+def _cnt(preds: list[int], _):
+    return len(preds)
 
 def _hits(preds: list[int], labels: list[int]) -> int:
     return len(set(preds).intersection(labels))
@@ -34,7 +38,7 @@ def _hit(preds: list[int], labels: list[int]) -> int:
     return 1 if _hits(preds, labels) > 0 else 0
 
 def _precision(preds: list[int], labels: list[int]) -> float:
-    return _hits(preds, labels) / len(preds)
+    return _hits(preds, labels) / len(preds) if len(preds) > 0 else 0
 
 def _recall(preds: list[int], labels: list[int]) -> float:
     return _hits(preds, labels) / len(labels)
