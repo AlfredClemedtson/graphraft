@@ -1,4 +1,7 @@
 from collections import defaultdict
+
+import torch
+import transformers
 from openai import OpenAI
 from neo4j import Driver
 
@@ -41,10 +44,10 @@ class NER:
         for rec in driver.execute_query("""MATCH (n) RETURN DISTINCT n.name AS name""").records:
             self.normal_to_original[rec['name'].lower()].append(rec['name'])  # map to all original names with specific canonical name
 
-    def find_source_nodes(self, question: str, driver: Driver, openai_api_key: str):
+    def find_source_nodes(self, question: str, driver: Driver, openai_api_key: str, model="gpt-4o-mini"):
         match self.dataset_name:
             case 'prime':
-                named_entities = self.identify_unlabeled_entities(question, openai_api_key=openai_api_key)
+                named_entities = self.identify_unlabeled_entities(question, openai_api_key=openai_api_key, model=model)
                 matched_nodes = self.match_labeled_entities(driver=driver, entities=named_entities, openai_api_key=openai_api_key)
                 return matched_nodes
             case 'mag':
@@ -55,26 +58,45 @@ class NER:
                 ...
 
 
-    def ask_ai(self, question: str, openai_api_key: str):
+    def ask_ai(self, question: str, openai_api_key: str, model="gpt-4o-mini"):
         user_model_correspondence = [({"role": "user", "content": f"Q:\"{multi_shot_example['question']}\""},
                                       {"role": "assistant", "content": f"A:{multi_shot_example['answer']}"}) for
                                      multi_shot_example in self.multi_shot_examples]
         user_model_correspondence = [x for xs in user_model_correspondence for x in xs]  # flatten
-        client = OpenAI(api_key=openai_api_key)
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        if model=="gpt-4o-mini":
+            client = OpenAI(api_key=openai_api_key)
+            completion = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": self.system_instruction},
+                    *user_model_correspondence,
+                    {"role": "user", "content": f"Q:\"{question}"},
+                ]
+            )
+            response = completion.choices[0].message.content.lstrip('A').lstrip(':')
+        if model=="llama-3.1-8b-instruct":
+            pipeline = transformers.pipeline(
+                "text-generation",
+                model="meta-llama/Meta-Llama-3.1-8B-Instruct",
+                model_kwargs={"torch_dtype": torch.bfloat16},
+                device_map="auto",
+            )
+            messages = [
                 {"role": "system", "content": self.system_instruction},
                 *user_model_correspondence,
                 {"role": "user", "content": f"Q:\"{question}"},
             ]
-        )
-        response = completion.choices[0].message.content.lstrip('A').lstrip(':')
+            outputs = pipeline(
+                messages,
+                max_new_tokens=256,
+            )
+            response = outputs[0]["generated_text"][-1]
+
         return response
 
 
-    def identify_unlabeled_entities(self, question: str, openai_api_key: str) -> list[tuple[str, str]]:
-        response = self.ask_ai(question, openai_api_key=openai_api_key)
+    def identify_unlabeled_entities(self, question: str, openai_api_key: str, model="gpt-4o-mini") -> list[tuple[str, str]]:
+        response = self.ask_ai(question, openai_api_key=openai_api_key, model=model)
         entities = response.lstrip('A').lstrip(':').split('|')
         labeled_entities = [('nameEmbedding', entity) for entity in entities]
         return labeled_entities

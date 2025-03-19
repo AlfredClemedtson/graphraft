@@ -3,14 +3,14 @@ from neo4j import Record, Driver
 class PathRetriever:
     QUERIES = {'1hop': """UNWIND $src_names AS srcName
                           MATCH (src {name: srcName})-[r]-(tgt)
-                          RETURN labels(src)[1] AS label1, src.name AS name1, type(r) AS type1, labels(tgt)[1] AS label2, count(DISTINCT tgt) AS totalCnt""",
+                          RETURN labels(src)[0] AS label1, src.name AS name1, type(r) AS type1, labels(tgt)[0] AS label2, count(DISTINCT tgt) AS totalCnt""",
                '2hop': """UNWIND $src_names AS srcName
                           MATCH (src1 {name: srcName})-[r1]-(var)-[r2]-(tgt) WHERE tgt <> src1
-                          RETURN labels(src1)[1] AS label1, src1.name AS name1, type(r1) AS type1, labels(var)[1] AS label2, type(r2) AS type2, labels(tgt)[1] AS label3, count(DISTINCT tgt) AS totalCnt""",
+                          RETURN labels(src1)[0] AS label1, src1.name AS name1, type(r1) AS type1, labels(var)[0] AS label2, type(r2) AS type2, labels(tgt)[0] AS label3, count(DISTINCT tgt) AS totalCnt""",
                '2path': """UNWIND $src_names AS srcName1
                           UNWIND $src_names AS srcName2
                           MATCH (src1 {name: srcName1})-[r1]-(tgt)-[r2]-(src2 {name: srcName2}) WHERE src1 <> src2
-                          RETURN labels(src1)[1] AS label1, src1.name AS name1, type(r1) AS type1, labels(tgt)[1] AS label2, type(r2) AS type2, labels(src2)[1] AS label3, src2.name AS name3, count(DISTINCT tgt) AS totalCnt""",
+                          RETURN labels(src1)[0] AS label1, src1.name AS name1, type(r1) AS type1, labels(tgt)[0] AS label2, type(r2) AS type2, labels(src2)[0] AS label3, src2.name AS name3, count(DISTINCT tgt) AS totalCnt""",
                }
 
     QUERY_EXTRA_PART_FOR_SUPERVISION = """, size([t IN collect(DISTINCT tgt) WHERE t.nodeId in $tgt_ids| t]) AS correctCnt"""
