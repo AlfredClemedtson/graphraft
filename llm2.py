@@ -19,115 +19,163 @@ RIGHT_PAD_TOKEN = '<|finetune_right_pad_id|>'
 ANSWER_SEPARATOR = '|' #replace with special token?
 PRIME_MAX_SEQUENCE_LENGTH = 15_000
 MAG_MAX_SEQUENCE_LENGTH = 10_000
+MAX_NEW_TOKENS = 100
 
 
-def formatting_prompts_func(example: dict, properties: list[str], add_label=False) -> list[str]: #add max_tokens!
-    output_texts = []
-    instruction = ("Given the information below, return the correct nodes for the following question: {question}\n"
-                   "Retrieved information:\n{info}\n")
-    if type(example['question']) is not list: #no batch size (implicit size 1)
-        example = {key : [value] for key, value in example.items()}
+class LLM2:
+    def __init__(self, model_dir, properties, max_sequence_length):
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_dir,
+            max_seq_length=max_sequence_length,  # None,  # max_seq_length,
+            dtype=torch.bfloat16,
+            load_in_4bit=True,
+        )
+        tokenizer.padding = True
+        tokenizer.pad_token = RIGHT_PAD_TOKEN
+        tokenizer.padding_side = 'right'
 
-    if not add_label:
-        example['answer'] = [""] * len(example['question'])
+        model = FastLanguageModel.get_peft_model(
+            model=model,  # adapter name??
+            r=64,  # 16,  # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", ],
+            lora_alpha=64,  # 16,
+            lora_dropout=0.05,  # 0,  # Supports any, but = 0 is optimized
+            bias="none",  # Supports any, but = "none" is optimized
+            #     # [NEW] "unsloth" uses 30% less VRAM, fits 2x larger batch sizes!
+            #     use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context
+            #     random_state=3407,
+            #     use_rslora=False,  # We support rank stabilized LoRA
+            #     loftq_config=None,  # And LoftQ
+        )
+        self.tokenizer = tokenizer
+        self.model = model
+        self.properties = properties
 
-    for question, nodes_data, answer_names in zip(example['question'], example['data'], example['answer_names']):
+
+    def format_prompt(self, question: str, nodes_data: list[dict], answer_names=None):
+        instruction = ("Given the information below, return the correct nodes for the following question: {question}\n"
+                       "Retrieved information:\n{info}\n")
         info = '\n\n'.join([
-               '\n'.join([f"{prop}: {value}" for prop, value in node_data.items() if prop in properties])
-                   for node_data in nodes_data])
-        answer = ANSWER_SEPARATOR.join(answer_names)
+            '\n'.join([f"{prop}: {value}" for prop, value in node_data.items() if prop in self.properties])
+            for node_data in nodes_data])
+
         text = (f"<|start_header_id|>user<|end_header_id|>\n{instruction.format(question=question, info=info)}\n"
                 f"<|start_header_id|>model<|end_header_id|>\n")
-        if add_label:
+        if answer_names is not None:
+            answer = ANSWER_SEPARATOR.join(answer_names)
             text += answer + EOS
-        output_texts.append(text)
-    return output_texts
+        return text
 
 
-def train(model, tokenizer, train_dataset, valid_dataset, model_save_dir, formatting_func,
-          max_sequence_length, do_train_on_responses_only=True):
-    collator = DataCollatorForCompletionOnlyLM(RESPONSE_TEMPLATE, tokenizer=tokenizer)
-    sft_config = SFTConfig(
-        per_device_train_batch_size=1,
-        per_device_eval_batch_size=1,
-        #auto_find_batch_size=True,
-        #dataset_num_proc=8,
-        #bf16=True,
-        #num_train_epochs=1,  # Set this for 1 full training run.
-        #gradient_accumulation_steps=4,
-        #warmup_steps=5,
-        #learning_rate=2e-4,#2e-5,#2e-4, #what is it for g-retriever?
-        #optim="adamw_8bit",
-        #weight_decay = 0.01,
-        #lr_scheduler_type = "linear",
-        logging_steps=20,
-        #seed=3407,
-        #report_to="none",  # Use this for WandB etc
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        output_dir=model_save_dir,
-        load_best_model_at_end=True,
-        max_seq_length=max_sequence_length,
-    )
-    trainer = SFTTrainer(
-        model=model,
-        args=sft_config,
-        processing_class=tokenizer,
-        train_dataset=train_dataset,
-        eval_dataset=valid_dataset,
-        #dataset_text_field="text",
-        #max_seq_length=max_seq_length,
-        #dataset_num_proc=8,
-        #packing=False,  # Can make training 5x faster for short sequences.
-        formatting_func=formatting_func,
-        data_collator=collator,
-    )
+    def formatting_prompts_func(self, example: dict, add_label=False) -> list[str]: #add max_tokens!
+        output_texts = []
+        if type(example['question']) is not list: #no batch size (implicit size 1)
+            example = {key : [value] for key, value in example.items()}
 
-    # # Train
-    if do_train_on_responses_only:
-        trainer = train_on_responses_only(trainer, instruction_part=INSTRUCTION_TEMPLATE, response_part=RESPONSE_TEMPLATE) # Must double check that this is correct!
+        if add_label:
+            for question, nodes_data, answer_names in zip(example['question'], example['data'], example['answer_names']):
+                text = self.format_prompt(question, nodes_data, answer_names)
+                output_texts.append(text)
+        else:
+            for question, nodes_data in zip(example['question'], example['data']):
+                text = self.format_prompt(question, nodes_data)
+                output_texts.append(text)
 
-    trainer.train()
+        return output_texts
 
 
-def evaluate(model, tokenizer, eval_dataset_dir: str, eval_rate: float, formatting_func, metrics, eval_save_dir = None):
-    eval_dataset = load_from_disk(eval_dataset_dir)
-    n_eval = int(eval_rate * len(eval_dataset))
-    qa_with_answers = eval_dataset \
-        .filter(lambda x: len(x['data']) > 0 and len(x['answer_names']) > 0) \
-        .filter(lambda _, i: i < n_eval, with_indices=True) \
-        .map(lambda x: add_predictions_by_generation(x, model=model, tokenizer=tokenizer,
-                                                     formatting_func=formatting_func, allowed_answers_ids=None),
-             num_proc=1)
+    def train(self, train_dataset, valid_dataset, model_save_dir, max_sequence_length, do_train_on_responses_only=True):
+        formatting_func = lambda x: self.formatting_prompts_func(x, add_label=True)
+        collator = DataCollatorForCompletionOnlyLM(RESPONSE_TEMPLATE, tokenizer=self.tokenizer)
+        sft_config = SFTConfig(
+            per_device_train_batch_size=1,
+            per_device_eval_batch_size=1,
+            #auto_find_batch_size=True,
+            #dataset_num_proc=8,
+            #bf16=True,
+            #num_train_epochs=1,  # Set this for 1 full training run.
+            #gradient_accumulation_steps=4,
+            #warmup_steps=5,
+            #learning_rate=2e-4,#2e-5,#2e-4, #what is it for g-retriever?
+            #optim="adamw_8bit",
+            #weight_decay = 0.01,
+            #lr_scheduler_type = "linear",
+            logging_steps=20,
+            #seed=3407,
+            #report_to="none",  # Use this for WandB etc
+            eval_strategy="epoch",
+            save_strategy="epoch",
+            output_dir=model_save_dir,
+            load_best_model_at_end=True,
+            max_seq_length=max_sequence_length,
+        )
+        trainer = SFTTrainer(
+            model=self.model,
+            args=sft_config,
+            processing_class=self.tokenizer,
+            train_dataset=train_dataset,
+            eval_dataset=valid_dataset,
+            #dataset_text_field="text",
+            #max_seq_length=max_seq_length,
+            #dataset_num_proc=8,
+            #packing=False,  # Can make training 5x faster for short sequences.
+            formatting_func=formatting_func,
+            data_collator=collator,
+        )
 
-    if eval_save_dir is not None:
-        qa_with_answers.save_to_disk(eval_save_dir)
+        # # Train
+        if do_train_on_responses_only:
+            trainer = train_on_responses_only(trainer, instruction_part=INSTRUCTION_TEMPLATE, response_part=RESPONSE_TEMPLATE) # Must double check that this is correct!
 
-    compute_metrics(predss=qa_with_answers['predicted_answers'], labelss=qa_with_answers['answer_names'],
-                    metrics=metrics)
-    
+        trainer.train()
 
-def add_predictions_by_generation(data: dict, model, tokenizer, formatting_func, allowed_answers_ids=None):
-    device = model.device
-    MAX_NEW_TOKENS = 100
-    generation_config = GenerationConfig(early_stopping=True, do_sample=False, max_new_tokens=MAX_NEW_TOKENS)
 
-    # if allowed_answers_ids is None:
-    #     from logits_processor import MyLogitsProcessor2
-    #     sep_token_id = tokenizer('|', add_special_tokens=False, return_tensors="pt").input_ids[0]
-    #     starting_ids = tokenizer(RESPONSE_TEMPLATE, add_special_tokens=False, return_tensors="pt").input_ids.to(device)[0]
-    #
-    #     logits_processor = MyLogitsProcessor2(allowed_answers_ids=allowed_answers_ids, starting_ids=starting_ids, end_token_id=tokenizer.eos_token_id,
-    #                                           sep_token_id=sep_token_id, tokenizer=tokenizer)
-    prompt = formatting_func(data)#[0].split(RESPONSE_TEMPLATE)[0] + RESPONSE_TEMPLATE
-    tokenized_prompt = tokenizer(prompt, return_tensors="pt", add_special_tokens=False, return_token_type_ids=False).to(device)
-    #output = model.generate(**tokenized_prompt, generation_config=generation_config, logits_processor=[logits_processor])[0]
-    output = model.generate(**tokenized_prompt, generation_config=generation_config)[0]
-    decoded_output = tokenizer.decode(output, skip_special_tokens=False)
-    data['predicted_answers'] = decoded_output.split(RESPONSE_TEMPLATE)[-1].split('<|eot_id|>')[0].split('|')
-    print(f"Generated: {decoded_output.split(RESPONSE_TEMPLATE)[-1]}")
-    print(f"True:      {ANSWER_SEPARATOR.join(data['answer_names'])}")
-    return data
+    def put_in_training_mode(self):
+        raise NotImplemented
+
+
+    def put_in_inference_mode(self):
+        self.model = FastLanguageModel.for_inference(self.model)
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+
+
+    def evaluate(self, eval_dataset_dir: str, eval_rate: float, metrics, eval_save_dir = None):
+        eval_dataset = load_from_disk(eval_dataset_dir)
+        n_eval = int(eval_rate * len(eval_dataset))
+        qa_with_answers = eval_dataset \
+            .filter(lambda x: len(x['data']) > 0 and len(x['answer_names']) > 0) \
+            .filter(lambda _, i: i < n_eval, with_indices=True) \
+            .map(lambda x: x | {'predicted_answers': self.generate_answer(x['question'], x['data'])},
+                 num_proc=1)
+
+        if eval_save_dir is not None:
+            qa_with_answers.save_to_disk(eval_save_dir)
+
+        compute_metrics(predss=qa_with_answers['predicted_answers'].to_list(), labelss=qa_with_answers['answer_names'].to_list(), metrics=metrics)
+
+
+    def generate_answer(self, question:str, nodes_data: list[dict], allowed_answers_ids=None):
+        device = self.model.device
+
+        generation_config = GenerationConfig(early_stopping=True, do_sample=False, max_new_tokens=MAX_NEW_TOKENS)
+
+        # if allowed_answers_ids is None:
+        #     from logits_processor import MyLogitsProcessor2
+        #     sep_token_id = tokenizer('|', add_special_tokens=False, return_tensors="pt").input_ids[0]
+        #     starting_ids = tokenizer(RESPONSE_TEMPLATE, add_special_tokens=False, return_tensors="pt").input_ids.to(device)[0]
+        #
+        #     logits_processor = MyLogitsProcessor2(allowed_answers_ids=allowed_answers_ids, starting_ids=starting_ids, end_token_id=tokenizer.eos_token_id,
+        #                                           sep_token_id=sep_token_id, tokenizer=tokenizer)
+        #prompt = self.formatting_prompts_func(data)#[0].split(RESPONSE_TEMPLATE)[0] + RESPONSE_TEMPLATE
+        prompt = self.format_prompt(question=question, nodes_data=nodes_data)
+        tokenized_prompt = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False, return_token_type_ids=False).to(device)
+        #output = model.generate(**tokenized_prompt, generation_config=generation_config, logits_processor=[logits_processor])[0]
+        output = self.model.generate(**tokenized_prompt, generation_config=generation_config)[0]
+        decoded_output = self.tokenizer.decode(output, skip_special_tokens=False)
+        predicted_answers = decoded_output.split(RESPONSE_TEMPLATE)[-1].split('<|eot_id|>')[0].split(ANSWER_SEPARATOR)
+        print(f"Generated: {decoded_output.split(RESPONSE_TEMPLATE)[-1]}")
+        print(f"True:      {ANSWER_SEPARATOR.join(predicted_answers)}")
+        return predicted_answers
 
 def main():
     parser = argparse.ArgumentParser()
@@ -163,66 +211,35 @@ def main():
             properties = ['pattern', 'name', 'abstract']
         case _:
             raise Exception(f"Unknown dataset: {args.dataset}")
-    # tokenizer = AutoTokenizer.from_pretrained('meta-llama/Llama-3.2-1B-Instruct')
-    # max_sequence_length = max([max(load_from_disk(data_dir).map(
-    #     lambda x: x | {'tokens_in_prompt': len(tokenizer(formatting_prompts_func(x, properties, add_label=True)))})[
-    #                                    'tokens_in_prompt']) for data_dir in
-    #                            [train_data_dir, valid_data_dir, test_data_dir]])
-    # print(max_sequence_length)
 
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=args.model_dir if args.adapter_dir is None else args.adapter_dir,
-        max_seq_length=max_sequence_length,#None,  # max_seq_length,
-        dtype=torch.bfloat16,
-        load_in_4bit=True,
-    )
-    tokenizer.padding = True
-    tokenizer.pad_token = RIGHT_PAD_TOKEN
-    tokenizer.padding_side = 'right'
-
-    model = FastLanguageModel.get_peft_model(
-        model=model,  # adapter name??
-        r=64,#16,  # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", ],
-        lora_alpha=64,#16,
-        lora_dropout=0.05,#0,  # Supports any, but = 0 is optimized
-        bias="none",  # Supports any, but = "none" is optimized
-    #     # [NEW] "unsloth" uses 30% less VRAM, fits 2x larger batch sizes!
-    #     use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context
-    #     random_state=3407,
-    #     use_rslora=False,  # We support rank stabilized LoRA
-    #     loftq_config=None,  # And LoftQ
-    )
+    model_dir = args.model_dir if args.adapter_dir is None else args.adapter_dir
+    llm2 = LLM2(model_dir, properties, max_sequence_length)
 
     if args.train:
-        formatting_func = lambda x: formatting_prompts_func(x, properties=properties, add_label=True)
         qa_with_retrieved_data_train = load_from_disk(train_data_dir)
         qa_with_retrieved_data_eval = load_from_disk(valid_data_dir)
         n_train = int(args.train_rate * len(qa_with_retrieved_data_train))
         n_eval = int(args.train_rate * len(qa_with_retrieved_data_eval))
 
-        qa_with_train_prompts = qa_with_retrieved_data_train \
+        qa_with_retrieved_data_train = qa_with_retrieved_data_train \
             .filter(lambda x: len(x['data']) > 0 and len(x['answer_names']) > 0) \
             .filter(lambda _, i: i < n_train, with_indices=True)
-        qa_with_eval_prompts = qa_with_retrieved_data_eval \
+        qa_with_retrieved_data_eval = qa_with_retrieved_data_eval \
             .filter(lambda x: len(x['data']) > 0 and len(x['answer_names']) > 0) \
             .filter(lambda _, i: i < n_eval, with_indices=True)
 
-        train(model=model, tokenizer=tokenizer, train_dataset=qa_with_train_prompts, valid_dataset=qa_with_eval_prompts,
-              model_save_dir=model_save_dir, formatting_func=formatting_func, do_train_on_responses_only=True,
+        llm2.train(train_dataset=qa_with_retrieved_data_train, valid_dataset=qa_with_retrieved_data_eval,
+              model_save_dir=model_save_dir, do_train_on_responses_only=True,
               max_sequence_length=max_sequence_length)
 
-
-    model = FastLanguageModel.for_inference(model)
-    tokenizer.pad_token = tokenizer.eos_token
-
-    formatting_func = lambda x: formatting_prompts_func(x, properties=properties, add_label=False)
-    metrics = ['f1', 'precision', 'recall', 'hit@1', 'hit@5', 'recall@20', 'mrr', 'num_nodes']
+    llm2.put_in_inference_mode()
 
     if args.eval:
-        evaluate(model=model, tokenizer=tokenizer, eval_dataset_dir=valid_data_dir, eval_rate=args.eval_rate, formatting_func=formatting_func, metrics=metrics)
+        llm2.evaluate(eval_dataset_dir=valid_data_dir, eval_rate=args.eval_rate,
+                      metrics=['f1', 'precision', 'recall', 'hit@1', 'hit@5', 'recall@20', 'mrr', 'num_nodes'])
     if args.test:
-        evaluate(model=model, tokenizer=tokenizer, eval_dataset_dir=test_data_dir, eval_rate=args.eval_rate, formatting_func=formatting_func, metrics=metrics)
+        llm2.evaluate(eval_dataset_dir=test_data_dir, eval_rate=args.eval_rate,
+                      metrics=['f1', 'precision', 'recall', 'hit@1', 'hit@5', 'recall@20', 'mrr', 'num_nodes'])
 
 if __name__ == '__main__':
     main()

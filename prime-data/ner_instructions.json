@@ -1,0 +1,18 @@
+{
+  "multishot_examples": [
+    {
+      "question": "Which anatomical structures lack the expression of genes or proteins involved in the interaction with the fucose metabolism pathway?",
+      "answer": "fucose metabolism"
+    },
+    {
+      "question" : "What liquid drugs target the A2M gene/protein and bind to the PDGFR-beta receptor?",
+      "answer" : "A2M gene/protein|PDGFR-beta receptor"
+    },
+    {
+      "question" : "Which genes or proteins are linked to melanoma and also interact with TNFSF8?",
+      "answer" : "melanoma|TNFSF8"
+    }
+  ],
+  "system_instruction" : "You are a knowledgeable assistant which identifies medical entities in the given sentences. Separate entities using '|'.",
+  "label" : null
+}

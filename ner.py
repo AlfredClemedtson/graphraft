@@ -1,109 +1,76 @@
 from collections import defaultdict
-
-import torch
-import transformers
 from openai import OpenAI
 from neo4j import Driver
 
-PRIME_MULTISHOT_EXAMPLES = [
-            {"question" : "Which anatomical structures lack the expression of genes or proteins involved in the interaction with the fucose metabolism pathway?", "answer" : "fucose metabolism"},
-            {"question" : "What liquid drugs target the A2M gene/protein and bind to the PDGFR-beta receptor?", "answer" : "A2M gene/protein|PDGFR-beta receptor"},
-            {"question" : "Which genes or proteins are linked to melanoma and also interact with TNFSF8?", "answer" : "melanoma|TNFSF8"},
-        ]
-PRIME_INSTRUCTION = "You are a knowledgeable assistant which identifies medical entities in the given sentences. Separate entities using '|'."
-
-MAG_MULTISHOT_EXAMPLES = [
-            {"question": "Could you find research articles on the measurement of radioactive gallium isotopes disintegration rates?",
-             "answer": "FieldOfStudy:measurement of radioactive gallium isotopes disintegration rates"},
-            {"question": "What research on water absorption in different frequency ranges have been referenced or deemed significant in the paper entitled 'High-resolution terahertz atmospheric water vapor continuum measurements'",
-             "answer": "FieldOfStudy:water absorption in different frequency ranges\nPaper:High-resolution terahertz atmospheric water vapor continuum measurements"},
-            {"question": "Publications by Point Park University authors on stellar populations in tidal tails",
-             "answer": "Institution:Point Park University\nFieldOfStudy:stellar populations in tidal tails"},
-            {"question": "Show me publications by A.J. Turvey on the topic of supersymmetry particle searches.",
-             "answer": "Author:A.J. Turvey\nField of study: supersymmetry particle searches"},
-        ]
-MAG_INSTRUCTION = "You are a smart assistant which identifies entities in a given questions. There are institutions, authors, fields of study and papers."
-MAG_LABELS = ['Institution', 'Author', 'FieldOfStudy', 'Paper']
-
 class NER:
-    def __init__(self, driver: Driver, dataset_name: str):
-        match dataset_name:
-            case 'prime':
-                self.dataset_name = dataset_name
-                self.multi_shot_examples = PRIME_MULTISHOT_EXAMPLES
-                self.system_instruction = PRIME_INSTRUCTION
-            case 'mag':
-                self.dataset_name = dataset_name
-                self.multi_shot_examples = MAG_MULTISHOT_EXAMPLES
-                self.system_instruction = MAG_INSTRUCTION
-                self.labels = MAG_LABELS
-            case _:
-                raise ValueError
+    def __init__(self, ner_instructions, driver: Driver, model='gpt-4o-mini', openai_api_key: str = None):
+        self.model = model
+        self.openai_api_key = openai_api_key
+        self.system_instruction = ner_instructions['system_instruction']
+        self.multi_shot_examples = ner_instructions['multi_shot_examples']
+        self.labels = ner_instructions['labels']
 
         self.normal_to_original = defaultdict(list)
         for rec in driver.execute_query("""MATCH (n) RETURN DISTINCT n.name AS name""").records:
             self.normal_to_original[rec['name'].lower()].append(rec['name'])  # map to all original names with specific canonical name
 
-    def find_source_nodes(self, question: str, driver: Driver, openai_api_key: str, model="gpt-4o-mini"):
-        match self.dataset_name:
-            case 'prime':
-                named_entities = self.identify_unlabeled_entities(question, openai_api_key=openai_api_key, model=model)
-                matched_nodes = self.match_labeled_entities(driver=driver, entities=named_entities, openai_api_key=openai_api_key)
-                return matched_nodes
-            case 'mag':
-                named_labeled_entities = self.identify_labeled_entities(question, openai_api_key=openai_api_key)
-                matched_nodes = self.match_labeled_entities(driver=driver, entities=named_labeled_entities, openai_api_key=openai_api_key)
-                return matched_nodes
-            case _:
-                ...
+        if model=='gpt-4o-mini':
+            self.pipeline = ...
+        else:
+            import transformers, torch
+            self.pipeline = transformers.pipeline(
+                "text-generation",
+                model="model",#"meta-llama/Meta-Llama-3.1-8B-Instruct",
+                model_kwargs={"torch_dtype": torch.bfloat16},
+                device_map="auto",
+            )
 
 
-    def ask_ai(self, question: str, openai_api_key: str, model="gpt-4o-mini"):
+    def find_source_nodes(self, question: str, driver: Driver):
+        named_entities = self._identify_unlabeled_entities(question) if self.labels is None else self._identify_labeled_entities(question)
+        matched_nodes = self._match_labeled_entities(driver=driver, entities=named_entities)
+        return matched_nodes
+
+
+    def _ask_ai(self, question: str, model='gpt-4o-mini'):
         user_model_correspondence = [({"role": "user", "content": f"Q:\"{multi_shot_example['question']}\""},
                                       {"role": "assistant", "content": f"A:{multi_shot_example['answer']}"}) for
                                      multi_shot_example in self.multi_shot_examples]
         user_model_correspondence = [x for xs in user_model_correspondence for x in xs]  # flatten
-        if model=="gpt-4o-mini":
-            client = OpenAI(api_key=openai_api_key)
+        messages = [
+            {"role": "system", "content": self.system_instruction},
+            *user_model_correspondence,
+            {"role": "user", "content": f"Q:\"{question}"},
+        ]
+        if model=='gpt-4o-mini':
+            client = OpenAI(api_key=self.openai_api_key)
             completion = client.chat.completions.create(
                 model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": self.system_instruction},
-                    *user_model_correspondence,
-                    {"role": "user", "content": f"Q:\"{question}"},
-                ]
+                messages=messages
             )
             response = completion.choices[0].message.content.lstrip('A').lstrip(':')
-        if model=="llama-3.1-8b-instruct":
-            pipeline = transformers.pipeline(
-                "text-generation",
-                model="meta-llama/Meta-Llama-3.1-8B-Instruct",
-                model_kwargs={"torch_dtype": torch.bfloat16},
-                device_map="auto",
-            )
-            messages = [
-                {"role": "system", "content": self.system_instruction},
-                *user_model_correspondence,
-                {"role": "user", "content": f"Q:\"{question}"},
-            ]
-            outputs = pipeline(
+
+        elif model=="llama-3.1-8b-instruct":
+            outputs = self.pipeline(
                 messages,
                 max_new_tokens=256,
             )
-            response = outputs[0]["generated_text"][-1]
+            response = outputs[0]["generated_text"][-1].lstrip('A').lstrip(':')
+        else:
+            raise ValueError(f"Unrecognized model: {model}")
 
         return response
 
 
-    def identify_unlabeled_entities(self, question: str, openai_api_key: str, model="gpt-4o-mini") -> list[tuple[str, str]]:
-        response = self.ask_ai(question, openai_api_key=openai_api_key, model=model)
+    def _identify_unlabeled_entities(self, question: str) -> list[tuple[str, str]]:
+        response = self._ask_ai(question)
         entities = response.lstrip('A').lstrip(':').split('|')
         labeled_entities = [('nameEmbedding', entity) for entity in entities]
         return labeled_entities
 
 
-    def identify_labeled_entities(self, question: str, openai_api_key: str) -> list[tuple[str, str]]:
-        response = self.ask_ai(question, openai_api_key=openai_api_key)
+    def _identify_labeled_entities(self, question: str) -> list[tuple[str, str]]:
+        response = self._ask_ai(question)
 
         idx0s, idx1s = [], []
         for label in self.labels:
@@ -122,7 +89,7 @@ class NER:
         return labeled_entities
 
 
-    def match_labeled_entities(self, driver: Driver, openai_api_key: str, entities: list[tuple[str, str]], k=100):
+    def _match_labeled_entities(self, driver: Driver, entities: list[tuple[str, str]], k=100):
         matched_entity_names = set()
         for label, string in entities:
             if string.lower() in self.normal_to_original.keys():  # Check if the exact string exists in db, ignoring label
@@ -132,7 +99,7 @@ class NER:
                     res = driver.execute_query("""WITH genai.vector.encode($string, 'OpenAI', { token: $api_key }) AS embedding
                                                   CALL db.index.vector.queryNodes($vectorIndex, $k, embedding) YIELD node
                                                   RETURN node.name AS name""",
-                                               parameters_={'string': string, 'k': k, 'api_key': openai_api_key,
+                                               parameters_={'string': string, 'k': k, 'api_key': self.openai_api_key,
                                                             'vectorIndex': label})
                     matched_entity_names.add(res.records[0]['name'])
                 except Exception as e:

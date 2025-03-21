@@ -1,0 +1,27 @@
+{
+  "multi_shot_examples": [
+    {
+      "question": "Could you find research articles on the measurement of radioactive gallium isotopes disintegration rates?",
+      "answer": "FieldOfStudy:measurement of radioactive gallium isotopes disintegration rates"
+    },
+    {
+      "question": "What research on water absorption in different frequency ranges have been referenced or deemed significant in the paper entitled \"High-resolution terahertz atmospheric water vapor continuum measurements\"",
+      "answer": "FieldOfStudy:water absorption in different frequency ranges\nPaper:High-resolution terahertz atmospheric water vapor continuum measurements"
+    },
+    {
+      "question": "Publications by Point Park University authors on stellar populations in tidal tails",
+      "answer": "Institution:Point Park University\nFieldOfStudy:stellar populations in tidal tails"
+    },
+    {
+      "question": "Show me publications by A.J. Turvey on the topic of supersymmetry particle searches.",
+      "answer": "Author:A.J. Turvey\nField of study: supersymmetry particle searches"
+    }
+  ],
+  "system_instruction": "You are a smart assistant which identifies entities in a given questions. There are institutions, authors, fields of study and papers.",
+  "labels": [
+    "Institution",
+    "Author",
+    "FieldOfStudy",
+    "Paper"
+  ]
+}
