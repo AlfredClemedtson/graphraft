@@ -18,8 +18,8 @@ END_OF_GENERATION_TOKEN = "<eos>"  # "<end_of_turn>"
 
 
 def sort_cyphers(data: dict) -> dict:
-    cyphers, hits, num_results = data['cyphers'], data['hits'], data['num_results']
-    data['cyphers'], data['hits'], data['num_results'] = zip(
+    cyphers, hits, num_results = data['cypher_queries'], data['hits'], data['num_results']
+    data['cypher_queries'], data['hits'], data['num_results'] = zip(
         *sorted(zip(cyphers, hits, num_results), key=lambda x: (-x[1], x[2])))
     return data
 
@@ -34,21 +34,21 @@ def best_label_is_good(data: dict, lowest_recall=1, lowest_precision=.1) -> bool
 def formatting_func(data: dict, add_label=True) -> str:  # Not used yet
     prompt = f"<start_of_turn>user\n{data['question']}<end_of_turn>" + START_OF_GENERATION_TOKENS
     if add_label:
-        answer = sort_cyphers(data)['cyphers'][0]
+        answer = sort_cyphers(data)['cypher_queries'][0]
         prompt += answer + END_OF_GENERATION_TOKEN
     return prompt
 
 
 def add_predicted_cypher(data: dict, beam_width: int, sequence_ranker: SequenceRanker, print_options=[],) -> dict:
     prompt = formatting_func(data=data, add_label=False)
-    possible_sequences = data['cyphers']
+    possible_sequences = data['cypher_queries']
     data['top_cypher_queries'] = sequence_ranker.rank_sequences(prompt=prompt, possible_sequences=possible_sequences, max_beam_width=beam_width)
 
     if 'summary' in print_options:
         print(f"Top cyphers: {data['top_cypher_queries']}\n"
-              f"Total #cyphers:     {len(data['cyphers'])}\n"
+              f"Total #cyphers:     {len(data['cypher_queries'])}\n"
               f"Generated #cyphers: {len(data['top_cypher_queries'])}\n"
-              f"Gen valid #cyphers: {len(set(data['top_cypher_queries']).intersection(data['cyphers']))}\n")
+              f"Gen valid #cyphers: {len(set(data['top_cypher_queries']).intersection(data['cypher_queries']))}\n")
 
     if 'add_details' in print_options:
         sorted_data = sort_cyphers(data)
@@ -56,7 +56,7 @@ def add_predicted_cypher(data: dict, beam_width: int, sequence_ranker: SequenceR
         print(f"Question: {data['question']}")
         for top_cypher in data['top_cypher_queries']:
             try:
-                i = sorted_data['cyphers'].index(top_cypher)
+                i = sorted_data['cypher_queries'].index(top_cypher)
                 precision = sorted_data['hits'][i] / sorted_data['num_results'][i]
                 recall = sorted_data['hits'][i] / len(data['answer_ids'])
                 if 'predicted_recall_at_1' not in data.keys():
@@ -115,22 +115,30 @@ def main():
     parser.add_argument('--generate', action='store_true')
     parser.add_argument('--model_dir', type=str,
                         default="neo4j/text2cypher-gemma-2-9b-it-finetuned-2024v1")
+    parser.add_argument('--dataset', type=str, default=None)
     parser.add_argument('--adapter_dir', type=str, default=None)
     parser.add_argument('--model_save_dir', type=str, default=None)
-    parser.add_argument('--data_dir', type=str, default='prime-data/qa_with_cyphers')
+    parser.add_argument('--data_dir', type=str, default=None)
     parser.add_argument('--train_data_dir', type=str, default=None)
     parser.add_argument('--valid_data_dir', type=str, default=None)
     parser.add_argument('--gen_data_dir', type=str, default=None)
-    parser.add_argument('--eval_save_dir', type=str, default="prime-data/qa_with_eval_cyphers")
-    parser.add_argument('--gen_save_dir', type=str, default="prime-data/qa_with_gen_cyphers")
+    parser.add_argument('--eval_save_dir', type=str, default=None)
+    parser.add_argument('--gen_save_dir', type=str, default=None)
+    # parser.add_argument('--eval_save_dir', type=str, default="prime-data/qa_with_eval_cyphers")
+    # parser.add_argument('--gen_save_dir', type=str, default="prime-data/qa_with_gen_cyphers")
     parser.add_argument('--use_base_prompt', action='store_true')
     parser.add_argument('--beam_width', type=int, default=5)
     parser.add_argument('--eval_fraction', type=float, default=1)
+    parser.add_argument('--gen_fraction', type=float, default=1)
     args = parser.parse_args()
 
     do_train = args.train
     do_evaluate = args.evaluate
     do_generate = args.generate
+
+    dataset_name = args.dataset
+    if dataset_name not in ['prime', 'mag']:
+        raise ValueError(f"Dataset {dataset_name} not supported. Select 'prime' or 'mag'")
 
     model_dir = args.model_dir
     adapter_dir = args.adapter_dir
@@ -144,19 +152,21 @@ def main():
             raise ValueError("--data_dir or --train_data_dir must be specified if --train is True")
         if do_train and args.valid_data_dir is None:
             raise ValueError("--data_dir or --valid_data_dir must be specified if --train is True")
-        if do_evaluate and args.valid_save_dir is None:
+        if (do_evaluate or do_generate) and args.valid_save_dir is None:
             raise ValueError("--data_dir or --valid_save_dir must be specified if --evaluate is True")
-    if do_generate and args.gen_data_dir is None:
-        raise ValueError("--gen_data_dir must be specified if --generate is True")
+    # if do_generate and args.gen_data_dir is None:
+    #     raise ValueError("--gen_data_dir must be specified if --generate is True")
     train_data_dir = os.path.join(args.data_dir, 'train') if args.train_data_dir is None else args.train_data_dir
     valid_data_dir = os.path.join(args.data_dir, 'valid') if args.valid_data_dir is None else args.valid_data_dir
-    gen_data_dir = args.gen_data_dir
+    # gen_data_dir = os.path.join(args.data_dir, 'valid') if args.gen_data_dir is None else args.gen_data_dir
+    gen_data_dir = os.path.join(args.data_dir, 'test') if args.gen_data_dir is None else args.gen_data_dir
 
     eval_save_dir = args.eval_save_dir
-    gen_save_dir = args.gen_save_dir
+    gen_save_dir = args.gen_save_dir if args.gen_save_dir is not None else f"{dataset_name}-data/qa_with_generated_cypher_queries_test"
 
     beam_width = args.beam_width
     eval_fraction = args.eval_fraction
+    gen_fraction = args.gen_fraction
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -212,10 +222,11 @@ def main():
 
     if do_generate:
         # Generate cypher queries for all questions
-        qa_with_train_cyphers = load_from_disk(gen_data_dir)
-        qa_with_gen_cyphers = qa_with_train_cyphers \
-            .map(lambda data: add_predicted_cypher(data, sequence_ranker=sequence_ranker, beam_width=beam_width,
-                                                   print_options=['summary']))
+        qa_with_cyphers = load_from_disk(gen_data_dir)
+        qa_with_gen_cyphers = qa_with_cyphers \
+            .filter(lambda _, i: i < int(len(qa_with_cyphers) * gen_fraction), with_indices=True) \
+            .map(lambda data: add_predicted_cypher(data, sequence_ranker=sequence_ranker, beam_width=beam_width,))
+                                                   #print_options=['summary']))
         qa_with_gen_cyphers.save_to_disk(gen_save_dir)
 
 
