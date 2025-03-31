@@ -1,18 +1,19 @@
 from collections import defaultdict
+import json
 from openai import OpenAI
 from neo4j import Driver
 
+#CREATE FULLTEXT INDEX _Entity_FullTextIndex FOR (n:_Entity_) ON EACH [n.name]
+
 class NER:
-    def __init__(self, ner_instructions, driver: Driver, model='gpt-4o-mini', openai_api_key: str = None):
+    def __init__(self, dataset_name, model='gpt-4o-mini', openai_api_key: str = None):
         self.model = model
         self.openai_api_key = openai_api_key
+
+        ner_instructions = json.load(open(f"{dataset_name}-data/ner_instructions.json"))
         self.system_instruction = ner_instructions['system_instruction']
         self.multi_shot_examples = ner_instructions['multi_shot_examples']
         self.labels = ner_instructions['labels']
-
-        self.normal_to_original = defaultdict(list)
-        for rec in driver.execute_query("""MATCH (n) RETURN DISTINCT n.name AS name""").records:
-            self.normal_to_original[rec['name'].lower()].append(rec['name'])  # map to all original names with specific canonical name
 
         if model=='gpt-4o-mini':
             self.pipeline = ...
@@ -28,6 +29,8 @@ class NER:
 
     def find_source_nodes(self, question: str, driver: Driver):
         named_entities = self._identify_unlabeled_entities(question) if self.labels is None else self._identify_labeled_entities(question)
+        print("Identified by LLM: ", named_entities)
+
         matched_nodes = self._match_labeled_entities(driver=driver, entities=named_entities)
         return matched_nodes
 
@@ -65,7 +68,7 @@ class NER:
     def _identify_unlabeled_entities(self, question: str) -> list[tuple[str, str]]:
         response = self._ask_ai(question)
         entities = response.lstrip('A').lstrip(':').split('|')
-        labeled_entities = [('nameEmbedding', entity) for entity in entities]
+        labeled_entities = [('_Entity_', entity) for entity in entities]
         return labeled_entities
 
 
@@ -83,25 +86,35 @@ class NER:
 
         labeled_entities = []
         for i in range(len(idx0s)):
-            label = response[idx0s[i]:idx1s[i] - 1]
-            value = response[idx1s[i]:idx0s[i + 1]] if i < len(idx0s) - 1 else response[idx1s[i]:]
+            label = response[idx0s[i]:idx1s[i]-1]
+            value = response[idx1s[i]:idx0s[i+1]] if i < len(idx0s) - 1 else response[idx1s[i]:]
             labeled_entities.append((label, value.strip()))
         return labeled_entities
 
 
     def _match_labeled_entities(self, driver: Driver, entities: list[tuple[str, str]], k=100):
-        matched_entity_names = set()
+        node_names = []
         for label, string in entities:
-            if string.lower() in self.normal_to_original.keys():  # Check if the exact string exists in db, ignoring label
-                matched_entity_names |= set(self.normal_to_original[string.lower()])
-            else:
-                try:  # Otherwise search for the most similar among the nodes of the specified label.
-                    res = driver.execute_query("""WITH genai.vector.encode($string, 'OpenAI', { token: $api_key }) AS embedding
-                                                  CALL db.index.vector.queryNodes($vectorIndex, $k, embedding) YIELD node
-                                                  RETURN node.name AS name""",
-                                               parameters_={'string': string, 'k': k, 'api_key': self.openai_api_key,
-                                                            'vectorIndex': label})
-                    matched_entity_names.add(res.records[0]['name'])
-                except Exception as e:
-                    print(e, string)
-        return list(matched_entity_names)
+            try:
+                res = driver.execute_query(FULL_TEXT_QUERY, parameters_={'string': string, 'fullTextIndex': label+'FullTextIndex'})
+                node_names.extend([rec['name'] for rec in res.records])
+            except Exception as e:
+                res = None
+            if res is None or len(res.records) == 0:
+                res = driver.execute_query(vector_sim_query, parameters_={'string': string, 'k': k,
+                                                                         'api_key': self.openai_api_key,
+                                                                         'vectorIndex': label+'NameEmbedding'})
+                node_names.extend([rec['name'] for rec in res.records])
+        return node_names
+
+from typing import LiteralString
+FULL_TEXT_QUERY: LiteralString = """CALL db.index.fulltext.queryNodes($fullTextIndex, $string) YIELD node, score
+                                    WITH node.name AS name
+                                    WHERE normalize(lower(name)) = normalize(lower($string))
+                                    RETURN name"""
+
+
+vector_sim_query: LiteralString = """WITH genai.vector.encode($string, 'OpenAI', { token: $api_key }) AS embedding
+                                     CALL db.index.vector.queryNodes($vectorIndex, $k, embedding) YIELD node
+                                     RETURN node.name AS name
+                                     LIMIT 1"""

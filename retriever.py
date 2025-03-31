@@ -22,9 +22,8 @@ ANSWER_NAMES_QUERY = """UNWIND $answerIds AS nodeId
                         RETURN x.name as name"""
 
 class Retriever:
-    def __init__(self, node_properties: list[str], sorting_index="nameEmbedding", vector_index="abstractEmbedding",
-                 pattern_rate=1, ef=10_000, count_tokens=False, max_nodes=None, max_tokens=None, formatter=None,
-                 tokenizer=None):
+    def __init__(self, node_properties: list[str], vector_index, sorting_index="nameEmbedding", pattern_rate=1,
+                 ef=10_000, count_tokens=False, max_nodes=None, max_tokens=None, formatter=None, tokenizer=None):
         self.node_properties = node_properties
         self.sorting_index = sorting_index
         self.vector_index = vector_index
@@ -39,7 +38,7 @@ class Retriever:
                 self.max_tokens, self.tokenizer = max_tokens, tokenizer
             if formatter is None:
                 format_node_data = lambda x: '\n'.join([f"{key}: {value}" for key, value in x.items() if value is not None and key not in {'nodeId', 'similarity'}])
-                self.formatter = lambda xs:  '\n\n'.join([format_node_data(x) for x in xs])
+                self.formatter = lambda xs:  '\n\n'.join([format_node_data(x) for x in xs.values()])
             else:
                 self.formatter = formatter
         else:  # count nodes
@@ -55,14 +54,14 @@ class Retriever:
             return query
         else:
             tgt, _, pattern = extract_from_query(query)
-            query = f"MATCH {pattern} RETURN {tgt}.nodeId as nodeId"
+            query = f"MATCH {pattern} RETURN DISTINCT {tgt}.nodeId as nodeId"
             for prop in self.node_properties:
                 query += f", {tgt}.{prop} AS {prop}"
             query += f", vector.similarity.cosine({tgt}.{self.sorting_index}, $questionEmbedding) AS similarity ORDER BY similarity DESC"
         return query
 
 
-    def stop_retrieval(self, retrieved_nodes: list[dict], rate) -> bool:
+    def stop_retrieval(self, retrieved_nodes: dict, rate) -> bool:
         if not self.count_tokens:
             return len(retrieved_nodes) >= rate * self.max_nodes
         else:
@@ -71,17 +70,25 @@ class Retriever:
             return len(tokenized_node_data) >= rate*self.max_tokens
 
 
-    def retrieve_data(self, driver:Driver, cypher_queries: list[str], q_emb=None):
+    def retrieve_data(self, driver:Driver, cypher_queries: list[str], q_emb):
         #If q_emb is not given, generate it!
-        retrieved_data = []
+        retrieved_data = {}
+        last_new_node = None
         for cypher_query in cypher_queries:
             cypher_query = self.modify_query(cypher_query)
             try:
                 with driver.session() as session:
                     for rec in session.run(cypher_query, parameters={'questionEmbedding': q_emb}):
-                        rec = dict(rec) | {'pattern': query_to_text_pattern(cypher_query, rec, key='name')}
-                        retrieved_data.append(rec)
+                        node_id = rec['nodeId']
+                        rec = dict(rec) | {'pattern': {query_to_text_pattern(cypher_query, rec, key='name')}}
+                        if node_id in retrieved_data.keys():
+                            retrieved_data[node_id]['pattern'].add(rec['pattern'])
+                        else:
+                            retrieved_data[node_id] = rec
+                            last_new_node = node_id
                         if self.stop_retrieval(retrieved_data, rate=self.pattern_rate):
+                            if last_new_node is not None:
+                                del retrieved_data[last_new_node]
                             break
                     else:
                         continue
@@ -93,10 +100,12 @@ class Retriever:
             for rec in session.run(cypher_query,
                                    parameters={'vectorIndex': self.vector_index, 'ef': self.ef,
                                                'questionEmbedding': q_emb,
-                                               'foundNodeIds': [data['nodeId'] for data in retrieved_data]}):
-                rec = dict(rec) | {'pattern' : "No pattern"}
-                retrieved_data.append(rec)
+                                               'foundNodeIds': list(retrieved_data.keys())}):
+                node_id = rec['nodeId']
+                rec = dict(rec) | {'pattern' : {"No pattern"}}
+                retrieved_data[node_id] = rec
                 if self.stop_retrieval(retrieved_data, rate=1):
+                    del retrieved_data[node_id]
                     break
         return retrieved_data
     

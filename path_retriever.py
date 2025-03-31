@@ -3,14 +3,14 @@ from neo4j import Record, Driver
 class PathRetriever:
     QUERIES = {'1hop': """UNWIND $src_names AS srcName
                           MATCH (src {name: srcName})-[r]-(tgt)
-                          RETURN labels(src)[0] AS label1, src.name AS name1, type(r) AS type1, labels(tgt)[0] AS label2, count(DISTINCT tgt) AS totalCnt""",
+                          RETURN labels(src) AS labels1, src.name AS name1, type(r) AS type1, labels(tgt) AS labels2, count(DISTINCT tgt) AS totalCnt""",
                '2hop': """UNWIND $src_names AS srcName
                           MATCH (src1 {name: srcName})-[r1]-(var)-[r2]-(tgt) WHERE tgt <> src1
-                          RETURN labels(src1)[0] AS label1, src1.name AS name1, type(r1) AS type1, labels(var)[0] AS label2, type(r2) AS type2, labels(tgt)[0] AS label3, count(DISTINCT tgt) AS totalCnt""",
+                          RETURN labels(src1) AS labels1, src1.name AS name1, type(r1) AS type1, labels(var) AS labels2, type(r2) AS type2, labels(tgt) AS labels3, count(DISTINCT tgt) AS totalCnt""",
                '2path': """UNWIND $src_names AS srcName1
                           UNWIND $src_names AS srcName2
                           MATCH (src1 {name: srcName1})-[r1]-(tgt)-[r2]-(src2 {name: srcName2}) WHERE src1 <> src2
-                          RETURN labels(src1)[0] AS label1, src1.name AS name1, type(r1) AS type1, labels(tgt)[0] AS label2, type(r2) AS type2, labels(src2)[0] AS label3, src2.name AS name3, count(DISTINCT tgt) AS totalCnt""",
+                          RETURN labels(src1) AS labels1, src1.name AS name1, type(r1) AS type1, labels(tgt) AS labels2, type(r2) AS type2, labels(src2) AS labels3, src2.name AS name3, count(DISTINCT tgt) AS totalCnt""",
                }
 
     QUERY_EXTRA_PART_FOR_SUPERVISION = """, size([t IN collect(DISTINCT tgt) WHERE t.nodeId in $tgt_ids| t]) AS correctCnt"""
@@ -28,13 +28,14 @@ class PathRetriever:
 
     @staticmethod
     def create_query(rec: Record, pattern: str):
+        correct_label = lambda labels: list(set(labels).difference({'_Entity_'}))[0]
         match pattern:
             case '1hop':
-                return f"MATCH (x1:{rec['label1']} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{rec['label2']}) RETURN x2.name AS name"
+                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])}) RETURN x2.name AS name"
             case '2hop':
-                return f"MATCH (x1:{rec['label1']} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{rec['label2']})-[r2:{rec['type2']}]-(x3:{rec['label3']}) RETURN x3.name AS name"
+                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])})-[r2:{rec['type2']}]-(x3:{correct_label(rec['labels3'])}) RETURN x3.name AS name"
             case '2path':
-                return f"MATCH (x1:{rec['label1']} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{rec['label2']})-[r2:{rec['type2']}]-(x3:{rec['label3']} {{name: \"{rec['name3']}\"}}) RETURN x2.name AS name"
+                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])})-[r2:{rec['type2']}]-(x3:{correct_label(rec['labels3'])} {{name: \"{rec['name3']}\"}}) RETURN x2.name AS name"
             case _:
                 raise ValueError
 

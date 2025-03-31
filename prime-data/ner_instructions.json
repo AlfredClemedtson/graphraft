@@ -1,5 +1,5 @@
 {
-  "multishot_examples": [
+  "multi_shot_examples": [
     {
       "question": "Which anatomical structures lack the expression of genes or proteins involved in the interaction with the fucose metabolism pathway?",
       "answer": "fucose metabolism"
@@ -14,5 +14,5 @@
     }
   ],
   "system_instruction" : "You are a knowledgeable assistant which identifies medical entities in the given sentences. Separate entities using '|'.",
-  "label" : null
+  "labels" : null
 }
