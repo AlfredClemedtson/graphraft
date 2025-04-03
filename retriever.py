@@ -1,10 +1,9 @@
 from neo4j import Driver
 
-
 def extract_from_query(query: str):
-    tgt = query.split("RETURN ")[1].split(".")[0]  # ... RETURN tgtVarName.name,...  --> tgtVarName  #Replace with regex
+    tgt = query.split("RETURN DISTINCT ")[1].split(".")[0]  # ... RETURN tgtVarName.name,...  --> tgtVarName  #Replace with regex
     tgt_label = query.split(tgt)[1].split(":")[1].split(")")[0]  # MATCH...(tgtVarName:tgtLabel)...  #Replace with regex
-    pattern = query.split("MATCH ")[-1].split("RETURN")[0]  # Replace
+    pattern = query.split("MATCH ")[-1].split(" RETURN")[0]  # Replace
     return tgt, tgt_label, pattern
 
 def query_to_text_pattern(query, rec, key):
@@ -66,23 +65,22 @@ class Retriever:
             return len(retrieved_nodes) >= rate * self.max_nodes
         else:
             formatted_node_data = self.formatter(retrieved_nodes)
-            tokenized_node_data = self.tokenizer(formatted_node_data)
-            return len(tokenized_node_data) >= rate*self.max_tokens
-
+            tokenized_node_data = self.tokenizer.tokenize(formatted_node_data)
+            return len(tokenized_node_data) >= rate * self.max_tokens
 
     def retrieve_data(self, driver:Driver, cypher_queries: list[str], q_emb):
         #If q_emb is not given, generate it!
         retrieved_data = {}
         last_new_node = None
         for cypher_query in cypher_queries:
-            cypher_query = self.modify_query(cypher_query)
             try:
+                cypher_query = self.modify_query(cypher_query)
                 with driver.session() as session:
                     for rec in session.run(cypher_query, parameters={'questionEmbedding': q_emb}):
                         node_id = rec['nodeId']
-                        rec = dict(rec) | {'pattern': {query_to_text_pattern(cypher_query, rec, key='name')}}
+                        rec = dict(rec) | {'pattern': [query_to_text_pattern(cypher_query, rec, key='name')]}
                         if node_id in retrieved_data.keys():
-                            retrieved_data[node_id]['pattern'].add(rec['pattern'])
+                            retrieved_data[node_id]['pattern'].append(rec['pattern'])
                         else:
                             retrieved_data[node_id] = rec
                             last_new_node = node_id
@@ -102,11 +100,12 @@ class Retriever:
                                                'questionEmbedding': q_emb,
                                                'foundNodeIds': list(retrieved_data.keys())}):
                 node_id = rec['nodeId']
-                rec = dict(rec) | {'pattern' : {"No pattern"}}
+                rec = dict(rec) | {'pattern' : ["No pattern"]}
                 retrieved_data[node_id] = rec
                 if self.stop_retrieval(retrieved_data, rate=1):
                     del retrieved_data[node_id]
                     break
+        retrieved_data = list(retrieved_data.values())
         return retrieved_data
     
     def retrieve_answer_names(self, driver: Driver, answer_ids: list[int]):

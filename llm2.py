@@ -1,3 +1,4 @@
+import unsloth
 from unsloth import FastLanguageModel
 from unsloth.chat_templates import train_on_responses_only
 
@@ -5,6 +6,7 @@ import os
 import time
 import argparse
 import torch
+import peft
 from datasets import load_from_disk
 from transformers import GenerationConfig
 from trl import SFTConfig, SFTTrainer, DataCollatorForCompletionOnlyLM
@@ -26,7 +28,7 @@ class LLM2:
     def __init__(self, model_dir, properties, max_sequence_length):
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=model_dir,
-            max_seq_length=max_sequence_length,  # None,  # max_seq_length,
+            max_seq_length=max_sequence_length,  # None
             dtype=torch.bfloat16,
             load_in_4bit=True,
         )
@@ -34,19 +36,21 @@ class LLM2:
         tokenizer.pad_token = RIGHT_PAD_TOKEN
         tokenizer.padding_side = 'right'
 
-        model = FastLanguageModel.get_peft_model(
-            model=model,  # adapter name??
-            r=64,  # 16,  # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", ],
-            lora_alpha=64,  # 16,
-            lora_dropout=0.05,  # 0,  # Supports any, but = 0 is optimized
-            bias="none",  # Supports any, but = "none" is optimized
-            #     # [NEW] "unsloth" uses 30% less VRAM, fits 2x larger batch sizes!
-            #     use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context
-            #     random_state=3407,
-            #     use_rslora=False,  # We support rank stabilized LoRA
-            #     loftq_config=None,  # And LoftQ
-        )
+        if type(model.base_model) is not peft.LoraModel: #Otherwise it already has LoRA params
+            model = FastLanguageModel.get_peft_model(
+                model=model,  # adapter name??
+                r=64,  # 16,  # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+                target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", ],
+                lora_alpha=64,  # 16,
+                #lora_dropout=0.05,  # 0,  # Supports any, but = 0 is optimized
+                bias="none",  # Supports any, but = "none" is optimized
+                #     # [NEW] "unsloth" uses 30% less VRAM, fits 2x larger batch sizes!
+                #     use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context
+                #     random_state=3407,
+                #     use_rslora=False,  # We support rank stabilized LoRA
+                #     loftq_config=None,  # And LoftQ
+            )
+
         self.tokenizer = tokenizer
         self.model = model
         self.properties = properties
@@ -56,7 +60,8 @@ class LLM2:
         instruction = ("Given the information below, return the correct nodes for the following question: {question}\n"
                        "Retrieved information:\n{info}\n")
         info = '\n\n'.join([
-            '\n'.join([f"{prop}: {value}" for prop, value in node_data.items() if prop in self.properties])
+            # '\n'.join([f"{prop}: {value}" for prop, value in node_data.items() if prop in self.properties])
+            '\n'.join([f"{prop}: {str(node_data[prop])}" for prop in self.properties])
             for node_data in nodes_data])
 
         text = (f"<|start_header_id|>user<|end_header_id|>\n{instruction.format(question=question, info=info)}\n"
@@ -154,7 +159,7 @@ class LLM2:
         compute_metrics(predss=qa_with_answers['predicted_answers'].to_list(), labelss=qa_with_answers['answer_names'].to_list(), metrics=metrics)
 
 
-    def generate_answer(self, question:str, nodes_data: list[dict], allowed_answers_ids=None):
+    def generate_answer(self, question:str, nodes_data: dict[int, dict], allowed_answers_ids=None):
         device = self.model.device
 
         generation_config = GenerationConfig(early_stopping=True, do_sample=False, max_new_tokens=MAX_NEW_TOKENS)
@@ -174,7 +179,7 @@ class LLM2:
         decoded_output = self.tokenizer.decode(output, skip_special_tokens=False)
         predicted_answers = decoded_output.split(RESPONSE_TEMPLATE)[-1].split('<|eot_id|>')[0].split(ANSWER_SEPARATOR)
         print(f"Generated: {decoded_output.split(RESPONSE_TEMPLATE)[-1]}")
-        print(f"True:      {ANSWER_SEPARATOR.join(predicted_answers)}")
+        print(f"Parsed:    {ANSWER_SEPARATOR.join(predicted_answers)}")
         return predicted_answers
 
 def main():

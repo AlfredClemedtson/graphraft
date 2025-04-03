@@ -31,11 +31,11 @@ class PathRetriever:
         correct_label = lambda labels: list(set(labels).difference({'_Entity_'}))[0]
         match pattern:
             case '1hop':
-                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])}) RETURN x2.name AS name"
+                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])}) RETURN DISTINCT x2.name AS name"
             case '2hop':
-                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])})-[r2:{rec['type2']}]-(x3:{correct_label(rec['labels3'])}) RETURN x3.name AS name"
+                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])})-[r2:{rec['type2']}]-(x3:{correct_label(rec['labels3'])}) RETURN DISTINCT x3.name AS name"
             case '2path':
-                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])})-[r2:{rec['type2']}]-(x3:{correct_label(rec['labels3'])} {{name: \"{rec['name3']}\"}}) RETURN x2.name AS name"
+                return f"MATCH (x1:{correct_label(rec['labels1'])} {{name: \"{rec['name1']}\"}})-[r1:{rec['type1']}]-(x2:{correct_label(rec['labels2'])})-[r2:{rec['type2']}]-(x3:{correct_label(rec['labels3'])} {{name: \"{rec['name3']}\"}}) RETURN DISTINCT x2.name AS name"
             case _:
                 raise ValueError
 

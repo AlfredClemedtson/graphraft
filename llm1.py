@@ -12,17 +12,17 @@ from trl import SFTConfig, SFTTrainer
 
 from sequence_ranker import SequenceRanker
 
-# PAD_TOKEN = ... #? what's best?
+PAD_TOKEN = "<pad>"
 START_OF_GENERATION_TOKENS = "<start_of_turn>assistant\n"
 END_OF_GENERATION_TOKEN = "<eos>"  # "<end_of_turn>"
 
 class LLM1:
-    def __init__(self, device, model_dir, adapter_dir = None, beam_width=5):
+    def __init__(self, device, model_dir, adapter_dir=None, beam_width=5):
         # Model
         bnb_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_use_double_quant=True, bnb_4bit_quant_type="nf4",
                                         bnb_4bit_compute_dtype=torch.bfloat16,)
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        self.tokenizer.padding_side = 'right'
+        self.tokenizer.padding_side = "right"
 
         model = AutoModelForCausalLM.from_pretrained(
             model_dir,
@@ -31,7 +31,6 @@ class LLM1:
             attn_implementation="eager",
             low_cpu_mem_usage=True,
         ).to(device)
-        # model.padding_side = 'right'
         if adapter_dir is None:
             lora_config = LoraConfig(r=64, lora_alpha=64, target_modules=None, lora_dropout=0.05, bias="none",
                                      task_type="CAUSAL_LM", )
@@ -46,8 +45,11 @@ class LLM1:
 
 
     def put_in_inference_mode(self):
-        # Todo
-        raise NotImplemented
+        self.tokenizer.padding_side = 'left'
+        self.tokenizer.pad_token = self.tokenizer.eos_token
+        # Todo?
+        # Put into inference mode? No grad, padding side: left?
+        # raise NotImplemented
 
 
     @staticmethod
@@ -80,52 +82,11 @@ class LLM1:
         return prompt
 
 
-    def predict_top_queries(self, question: str, possible_queries: list[str],):
+    def predict_top_queries(self, question: str, possible_queries: list[str]):
         prompt = LLM1.formatting_func(question=question)
         top_queries = self.sequence_ranker.rank_sequences(prompt, possible_sequences=possible_queries,
                                                           max_beam_width=self.beam_width)
         return top_queries
-
-    # def add_predicted_cypher(data: dict, beam_width: int, sequence_ranker: SequenceRanker, print_options=[],) -> dict:
-    #     prompt = self.formatting_func(question=data['question'], data=data, add_label=False)
-    #     possible_sequences = data['cypher_queries']
-    #     data['top_cypher_queries'] = sequence_ranker.rank_sequences(prompt=prompt, possible_sequences=possible_sequences, max_beam_width=beam_width)
-    #
-    #     if 'summary' in print_options:
-    #         print(f"Top cyphers: {data['top_cypher_queries']}\n"
-    #               f"Total #cyphers:     {len(data['cypher_queries'])}\n"
-    #               f"Generated #cyphers: {len(data['top_cypher_queries'])}\n"
-    #               f"Gen valid #cyphers: {len(set(data['top_cypher_queries']).intersection(data['cypher_queries']))}\n")
-    #
-    #     if 'add_details' in print_options:
-    #         sorted_data = sort_cyphers(data)
-    #         max_recall = 0
-    #         print(f"Question: {data['question']}")
-    #         for top_cypher in data['top_cypher_queries']:
-    #             try:
-    #                 i = sorted_data['cypher_queries'].index(top_cypher)
-    #                 precision = sorted_data['hits'][i] / sorted_data['num_results'][i]
-    #                 recall = sorted_data['hits'][i] / len(data['answer_ids'])
-    #                 if 'predicted_recall_at_1' not in data.keys():
-    #                     data['rank@1'] = i + 1
-    #                     data['num_nodes_at_1'] = sorted_data['num_results'][i]
-    #                     data['predicted_recall_at_1'] = recall
-    #                 max_recall = max(max_recall, recall)
-    #                 print(f"Rank: {i + 1}   Precision: {precision:.3f}   Recall: {recall:.3f}   Cypher query: {top_cypher}")
-    #             except ValueError:
-    #                 print("not expected...")
-    #
-    #         print(f"Max recall: {max_recall}, Recall@1: {data.get('predicted_recall_at_1', '-')}, "
-    #               f"#nodes@1: {data.get('num_nodes_at_1', '-')} Rank@1: {data.get('rank@1', '-')}\n")
-    #         data['predicted_max_recall'] = max_recall
-    #
-    #     if 'gpu_info' in print_options:
-    #         print("torch.cuda.memory_allocated: %fGB" % (torch.cuda.memory_allocated(0) / 1024 / 1024 / 1024))
-    #         print("torch.cuda.memory_reserved: %fGB" % (torch.cuda.memory_reserved(0) / 1024 / 1024 / 1024))
-    #         print("torch.cuda.max_memory_reserved: %fGB" % (torch.cuda.max_memory_reserved(0) / 1024 / 1024 / 1024))
-    #
-    #     return data
-
 
     def train(self, train_dataset: Dataset, eval_dataset: Dataset, model_save_dir: str):
         # Load data
@@ -175,45 +136,16 @@ def main():
 
     parser.add_argument('--train_rate', type=float, default=1)
     parser.add_argument('--eval_rate', type=float, default=1)
+    parser.add_argument('--valid_rate', type=float, default=1)
     parser.add_argument('--test_rate', type=float, default=1)
 
-    parser.add_argument('--model_dir', type=str, default="meta-llama/Llama-3.1-8B-Instruct")  # use -Instruct?
+    parser.add_argument('--model_dir', type=str, default="neo4j/text2cypher-gemma-2-9b-it-finetuned-2024v1")  # use -Instruct?
     parser.add_argument('--adapter_dir', type=str, default=None)
     parser.add_argument('--model_save_name', type=str, default=None)
-
+    parser.add_argument('--generate_save_dir', type=str, default=None)
     parser.add_argument('--beam_width', type=int, default=5)
 
-    parser.add_argument('--output_valid_save_dir', type=str, default=None)
-    parser.add_argument('--output_test_save_dir', type=str, default=None)
-
     args = parser.parse_args()
-
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('--train', action='store_true')
-    # parser.add_argument('--evaluate', action='store_true')
-    # parser.add_argument('--generate', action='store_true')
-    # parser.add_argument('--model_dir', type=str,
-    #                     default="neo4j/text2cypher-gemma-2-9b-it-finetuned-2024v1")
-    # parser.add_argument('--dataset', type=str, default=None)
-    # parser.add_argument('--adapter_dir', type=str, default=None)
-    # parser.add_argument('--model_save_dir', type=str, default=None)
-    # parser.add_argument('--data_dir', type=str, default=None)
-    # parser.add_argument('--train_data_dir', type=str, default=None)
-    # parser.add_argument('--valid_data_dir', type=str, default=None)
-    # parser.add_argument('--gen_data_dir', type=str, default=None)
-    # parser.add_argument('--eval_save_dir', type=str, default=None)
-    # parser.add_argument('--gen_save_dir', type=str, default=None)
-    # # parser.add_argument('--eval_save_dir', type=str, default="prime-data/qa_with_eval_cyphers")
-    # # parser.add_argument('--gen_save_dir', type=str, default="prime-data/qa_with_gen_cyphers")
-    # parser.add_argument('--use_base_prompt', action='store_true')
-    # parser.add_argument('--beam_width', type=int, default=5)
-    # parser.add_argument('--eval_fraction', type=float, default=1)
-    # parser.add_argument('--gen_fraction', type=float, default=1)
-    # args = parser.parse_args()
-    #
-    # do_train = args.train
-    # do_evaluate = args.evaluate
-    # do_generate = args.generate
 
     model_save_name = args.model_save_name if args.model_save_name is not None else f"llm1-{int(time.time()) % 100_000}"
     model_save_dir = os.path.join(f"{args.dataset}-models", model_save_name)
@@ -221,82 +153,43 @@ def main():
     if args.dataset not in ['prime', 'mag']:
         raise ValueError(f"Unknown dataset: {args.dataset}, must be either 'prime' or 'mag'")
 
-    train_data_dir = os.path.join(f"{args.dataset}-data/qa_with_ner", 'train')
-    valid_data_dir = os.path.join(f"{args.dataset}-data/qa_with_ner", 'valid')
-    test_data_dir = os.path.join(f"{args.dataset}-data/qa_with_ner", 'test')
+    train_data_dir = f"{args.dataset}-data/qa_with_cypher_queries/train"
+    valid_data_dir = f"{args.dataset}-data/qa_with_cypher_queries/valid"
+    test_data_dir = f"{args.dataset}-data/qa_with_cypher_queries/test"
+
+    generate_save_dir = f"{args.dataset}-data/qa_with_generated_cypher_queries" if args.generate_save_dir is None else args.generate_save_dir
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # # Model
-    # bnb_config = BitsAndBytesConfig(
-    #     load_in_4bit=True,
-    #     bnb_4bit_use_double_quant=True,
-    #     bnb_4bit_quant_type="nf4",
-    #     bnb_4bit_compute_dtype=torch.bfloat16,
-    # )
-    # tokenizer = AutoTokenizer.from_pretrained(model_dir)
-    # tokenizer.padding_side = 'right'
-    #
-    # model = AutoModelForCausalLM.from_pretrained(
-    #     model_dir,
-    #     quantization_config=bnb_config if device != torch.device('cpu') else None,
-    #     torch_dtype=torch.bfloat16,
-    #     attn_implementation="eager",
-    #     low_cpu_mem_usage=True,
-    # ).to(device)
-    # model.padding_side = 'right'
-
-    # if adapter_dir is None:
-    #     lora_config = LoraConfig(r=64, lora_alpha=64, target_modules=None, lora_dropout=0.05, bias="none", task_type="CAUSAL_LM", )
-    #     model = get_peft_model(model=model, peft_config=lora_config)
-    # else:
-    #     model = PeftModel.from_pretrained(model, adapter_dir)
     llm1 = LLM1(device=device, model_dir=args.model_dir, adapter_dir=args.adapter_dir,
                 beam_width=args.beam_width)
 
     if args.train:
         # Put in train mode
+        max_train_datas = int(len(load_from_disk(train_data_dir)) * args.train_rate)
         qa_with_supervised_prompts_train = load_from_disk(train_data_dir)\
             .filter(lambda x: llm1.best_label_is_good(x, lowest_recall=1, lowest_precision=.1))\
+            .filter(lambda _, i: i < max_train_datas, with_indices=True) \
             .map(lambda x: x | {'text': llm1.format_and_add_true_label(x['question'], x)})
+        max_eval_datas = int(len(load_from_disk(valid_data_dir)) * args.eval_rate)
         qa_with_supervised_prompts_valid = load_from_disk(valid_data_dir) \
             .filter(lambda x: llm1.best_label_is_good(x, lowest_recall=1, lowest_precision=.1)) \
+            .filter(lambda _, i: i < max_eval_datas, with_indices=True) \
             .map(lambda x: x | {'text': llm1.format_and_add_true_label(x['question'], x)})
 
         llm1.train(train_dataset=qa_with_supervised_prompts_train,
               eval_dataset=qa_with_supervised_prompts_valid, model_save_dir=model_save_dir)
 
-    # Put into inference mode? No grad, padding side: left?
     llm1.put_in_inference_mode()
 
     if args.generate_valid:
-        _ = llm1.generate(dataset_dir=valid_data_dir, ratio=args.valid_fraction, output_save_dir=eval_save_dir)
+        valid_output_save_dir = os.path.join(generate_save_dir, "valid")
+        _ = llm1.generate(dataset_dir=valid_data_dir, ratio=args.valid_rate, output_save_dir=valid_output_save_dir)
 
     if args.generate_test:
-        _ = llm1.generate(dataset_dir=test_data_dir, ratio=args.test_fraction, output_save_dir=test_save_dir)
+        test_output_save_dir = os.path.join(generate_save_dir, "test")
+        _ = llm1.generate(dataset_dir=test_data_dir, ratio=args.test_rate, output_save_dir=test_output_save_dir)
 
-    # if do_evaluate:
-    #     qa_with_cyphers = load_from_disk(valid_data_dir)
-    #     qa_with_evaluation_result = qa_with_cyphers\
-    #         .filter(lambda _, i: i < int(len(qa_with_cyphers) * eval_fraction), with_indices=True) \
-    #         .map(lambda x: x | {'top_cypher_queries' : llm1.predict_top_queries(x['question'], x['cypher_queries'])})
-    #         # .map(lambda data: add_predicted_cypher(data, sequence_ranker=sequence_ranker, beam_width=beam_width,
-    #         #                                        print_options=['add_details', 'gpu_info']))
-    #
-    #     print(f"Avg recall@1: {np.mean(qa_with_evaluation_result['predicted_recall_at_1']):.2f}    "
-    #           f"Avg top recall of 5: {np.mean(qa_with_evaluation_result['predicted_max_recall'])}    "
-    #           f"Avg #nodes@1 {np.mean(qa_with_evaluation_result['num_nodes_at_1'])}")
-    #     qa_with_evaluation_result.save_to_disk(eval_save_dir)
-    #
-    # if do_generate:
-    #     # Generate cypher queries for all questions
-    #     qa_with_cyphers = load_from_disk(gen_data_dir)
-    #     qa_with_gen_cyphers = qa_with_cyphers \
-    #         .filter(lambda _, i: i < int(len(qa_with_cyphers) * gen_fraction), with_indices=True) \
-    #         .map(lambda x: x | {'top_cypher_queries': llm1.predict_top_queries(x['question'], x['cypher_queries'])})
-    #         # .map(lambda data: add_predicted_cypher(data, sequence_ranker=sequence_ranker, beam_width=beam_width,))
-    #                                                #print_options=['summary']))
-    #     qa_with_gen_cyphers.save_to_disk(gen_save_dir)
 
 if __name__ == '__main__':
     main()
