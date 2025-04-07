@@ -107,8 +107,9 @@ class Retriever:
                     break
         retrieved_data = list(retrieved_data.values())
         return retrieved_data
-    
-    def retrieve_answer_names(self, driver: Driver, answer_ids: list[int]):
+
+    @staticmethod
+    def retrieve_answer_names(driver: Driver, answer_ids: list[int]):
         res = driver.execute_query(ANSWER_NAMES_QUERY, parameters_={'answerIds': answer_ids})
         names = [rec['name'] for rec in res.records]
         return names
