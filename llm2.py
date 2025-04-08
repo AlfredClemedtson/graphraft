@@ -38,17 +38,11 @@ class LLM2:
 
         if type(model.base_model) is not peft.LoraModel: #Otherwise it already has LoRA params
             model = FastLanguageModel.get_peft_model(
-                model=model,  # adapter name??
-                r=64,  # 16,  # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+                model=model,
+                r=64,
                 target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", ],
-                lora_alpha=64,  # 16,
-                #lora_dropout=0.05,  # 0,  # Supports any, but = 0 is optimized
-                bias="none",  # Supports any, but = "none" is optimized
-                #     # [NEW] "unsloth" uses 30% less VRAM, fits 2x larger batch sizes!
-                #     use_gradient_checkpointing="unsloth",  # True or "unsloth" for very long context
-                #     random_state=3407,
-                #     use_rslora=False,  # We support rank stabilized LoRA
-                #     loftq_config=None,  # And LoftQ
+                lora_alpha=64,
+                bias="none",
             )
 
         self.tokenizer = tokenizer
@@ -60,7 +54,6 @@ class LLM2:
         instruction = ("Given the information below, return the correct nodes for the following question: {question}\n"
                        "Retrieved information:\n{info}\n")
         info = '\n\n'.join([
-            # '\n'.join([f"{prop}: {value}" for prop, value in node_data.items() if prop in self.properties])
             '\n'.join([f"{prop}: {str(node_data[prop])}" for prop in self.properties])
             for node_data in nodes_data])
 
@@ -95,19 +88,7 @@ class LLM2:
         sft_config = SFTConfig(
             per_device_train_batch_size=1,
             per_device_eval_batch_size=1,
-            #auto_find_batch_size=True,
-            #dataset_num_proc=8,
-            #bf16=True,
-            #num_train_epochs=1,  # Set this for 1 full training run.
-            #gradient_accumulation_steps=4,
-            #warmup_steps=5,
-            #learning_rate=2e-4,#2e-5,#2e-4, #what is it for g-retriever?
-            #optim="adamw_8bit",
-            #weight_decay = 0.01,
-            #lr_scheduler_type = "linear",
             logging_steps=20,
-            #seed=3407,
-            #report_to="none",  # Use this for WandB etc
             eval_strategy="epoch",
             save_strategy="epoch",
             output_dir=model_save_dir,
@@ -121,9 +102,7 @@ class LLM2:
             train_dataset=train_dataset,
             eval_dataset=valid_dataset,
             #dataset_text_field="text",
-            #max_seq_length=max_seq_length,
-            #dataset_num_proc=8,
-            #packing=False,  # Can make training 5x faster for short sequences.
+            #max_seq_length=max_seq_length
             formatting_func=formatting_func,
             data_collator=collator,
         )
@@ -159,22 +138,13 @@ class LLM2:
         compute_metrics(predss=qa_with_answers['predicted_answers'].to_list(), labelss=qa_with_answers['answer_names'].to_list(), metrics=metrics)
 
 
-    def generate_answer(self, question:str, nodes_data: dict[int, dict], allowed_answers_ids=None):
+    def generate_answer(self, question:str, nodes_data: list[dict]):
         device = self.model.device
 
         generation_config = GenerationConfig(early_stopping=True, do_sample=False, max_new_tokens=MAX_NEW_TOKENS)
 
-        # if allowed_answers_ids is None:
-        #     from logits_processor import MyLogitsProcessor2
-        #     sep_token_id = tokenizer('|', add_special_tokens=False, return_tensors="pt").input_ids[0]
-        #     starting_ids = tokenizer(RESPONSE_TEMPLATE, add_special_tokens=False, return_tensors="pt").input_ids.to(device)[0]
-        #
-        #     logits_processor = MyLogitsProcessor2(allowed_answers_ids=allowed_answers_ids, starting_ids=starting_ids, end_token_id=tokenizer.eos_token_id,
-        #                                           sep_token_id=sep_token_id, tokenizer=tokenizer)
-        #prompt = self.formatting_prompts_func(data)#[0].split(RESPONSE_TEMPLATE)[0] + RESPONSE_TEMPLATE
         prompt = self.format_prompt(question=question, nodes_data=nodes_data)
         tokenized_prompt = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False, return_token_type_ids=False).to(device)
-        #output = model.generate(**tokenized_prompt, generation_config=generation_config, logits_processor=[logits_processor])[0]
         output = self.model.generate(**tokenized_prompt, generation_config=generation_config)[0]
         decoded_output = self.tokenizer.decode(output, skip_special_tokens=False)
         predicted_answers = decoded_output.split(RESPONSE_TEMPLATE)[-1].split('<|eot_id|>')[0].split(ANSWER_SEPARATOR)

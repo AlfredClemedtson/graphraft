@@ -3,23 +3,21 @@ from neo4j import Driver
 import torch
 
 from openai import OpenAI
-from ner import NER
-from path_retriever import PathRetriever
+from retrieval.ner import NER
+from retrieval.path_retriever import PathRetriever
 from llm1 import LLM1
-from retriever import Retriever
+from retrieval.retriever import Retriever
 from llm2 import LLM2
 
-class BigModel:
+class GraphRAFT:
     def __init__(self, dataset_name, llm1_model_dir, llm1_adapter_dir, llm1_beam_width, llm2_model_dir, llm2_max_sequence_length, openai_api_key):
         self.dataset_name = dataset_name
         match dataset_name:
             case 'prime':
-                #max_sequence_length = 15_000#15_000#PRIME_MAX_SEQUENCE_LENGTH  # calculate instead
                 retrieve_properties = ['name', 'details']
                 prompt_node_properties = ['pattern'] + retrieve_properties
                 big_vector_index = 'textEmbedding'
             case 'mag':
-                #max_sequence_length = 10_000#MAG_MAX_SEQUENCE_LENGTH
                 retrieve_properties = ['name', 'abstract']
                 prompt_node_properties = ['pattern'] + retrieve_properties
                 big_vector_index = 'abstractEmbedding'
@@ -28,8 +26,6 @@ class BigModel:
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # self.openai_client = OpenAI(api_key=openai_api_key)
-        # self.question_embedder = lambda question: self.openai_client.embeddings.create(input=question,model='text-embedding-ada-002').data[0].embedding
         self.ner = NER(dataset_name=dataset_name, openai_api_key=openai_api_key)
         self.path_retriever = PathRetriever(dataset_name)
         self.llm1 = LLM1(device=device, model_dir=llm1_model_dir, adapter_dir=llm1_adapter_dir, beam_width=llm1_beam_width)
@@ -49,8 +45,6 @@ class BigModel:
         print("Find all possible queries...")
         all_possible_queries = self.path_retriever.retrieve_paths(driver, predicted_source_nodes)['cypher_queries']
         print("    ", f"#: {len(all_possible_queries)}")
-        for query in all_possible_queries:
-            print("    ", query)
 
         print(f"Generate retrieval queries...")
         predicted_top_queries = self.llm1.predict_top_queries(question=question, possible_queries=all_possible_queries)

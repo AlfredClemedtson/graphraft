@@ -1,16 +1,14 @@
 import time
 import os
 import argparse
-import numpy as np
 import torch
-from transformers import BitsAndBytesConfig, GenerationConfig, AutoModelForCausalLM, PreTrainedTokenizerBase, \
-    AutoTokenizer
+from transformers import BitsAndBytesConfig, AutoModelForCausalLM, AutoTokenizer
 from datasets import Dataset
 from datasets import load_from_disk
 from peft import LoraConfig, PeftModel, get_peft_model
 from trl import SFTConfig, SFTTrainer
 
-from sequence_ranker import SequenceRanker
+from constrained_decoding.sequence_ranker import SequenceRanker
 
 PAD_TOKEN = "<pad>"
 START_OF_GENERATION_TOKENS = "<start_of_turn>assistant\n"
@@ -87,6 +85,7 @@ class LLM1:
         top_queries = self.sequence_ranker.rank_sequences(prompt, possible_sequences=possible_queries,
                                                           max_beam_width=self.beam_width)
         return top_queries
+
 
     def train(self, train_dataset: Dataset, eval_dataset: Dataset, model_save_dir: str):
         # Load data
