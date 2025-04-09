@@ -25,7 +25,7 @@ def compute_metrics(predss: list[list[int]], labelss: list[list[int]], metrics: 
     max_length = max([len(metric) for metric in metrics])
     if do_print:
         for metric, value in results.items():
-            print(f"{metric.ljust(max_length)}: {value:.3f}")
+            print(f"{metric.ljust(max_length)}: {value:.4f}")
     return results
 
 def _cnt(preds: list[int], _):

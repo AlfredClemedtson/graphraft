@@ -1,7 +1,6 @@
-import torch
 from transformers import GenerationConfig
 
-from logits_processor import MyLogitsProcessor
+from constrained_decoding.logits_processor import MyLogitsProcessor
 
 class SequenceRanker:
     def __init__(self, model, tokenizer, device, start_of_generation_tokens: str, end_of_generation_token: str):
