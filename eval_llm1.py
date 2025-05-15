@@ -56,7 +56,7 @@ def main():
                           count_tokens=count_tokens, max_nodes=args.max_nodes, max_tokens=args.max_tokens, formatter=None,
                           tokenizer=tokenizer)
 
-    qa_with_generated_cypher_queries = load_from_disk(f"{args.dataset}-data/qa_with_generated_cypher_queries_gemma2_1/{args.split}")
+    qa_with_generated_cypher_queries = load_from_disk(f"{args.dataset}-data/qa_with_generated_cypher_queries/{args.split}")
 
     qa_with_generated_cypher_queries = qa_with_generated_cypher_queries.map(
         lambda x: x | {'top_cypher_queries': [q.replace('RETURN x', 'RETURN DISTINCT x') for q in x['top_cypher_queries']]}) #temp solution, to be removed
