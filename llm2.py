@@ -156,7 +156,9 @@ class LLM2:
         tokenized_prompt = self.tokenizer(prompt, return_tensors="pt", add_special_tokens=False, return_token_type_ids=False).to(device)
         output = self.model.generate(**tokenized_prompt, generation_config=generation_config)[0]
         decoded_output = self.tokenizer.decode(output, skip_special_tokens=False)
-        predicted_answers = decoded_output.split(RESPONSE_TEMPLATE)[-1].split('<|eot_id|>')[0].split(ANSWER_SEPARATOR)
+        # predicted_answers = decoded_output.split(RESPONSE_TEMPLATE)[-1].split('<|eot_id|>')[0].split(ANSWER_SEPARATOR)
+        response = decoded_output.split(RESPONSE_TEMPLATE)[-1]
+        predicted_answers = response.split('<|eot_id|>')[0].split(ANSWER_SEPARATOR) if '<|eot_id|>' in response else response.split(ANSWER_SEPARATOR)[:-1]
         if add_more_answers:
             predicted_answers.extend([node_data['name'] for node_data in nodes_data if node_data['name'] not in predicted_answers])
         print(f"Generated: {decoded_output.split(RESPONSE_TEMPLATE)[-1]}")
@@ -224,10 +226,10 @@ def main():
     llm2.put_in_inference_mode()
 
     if args.eval:
-        llm2.evaluate(eval_dataset_dir=valid_data_dir, eval_rate=args.eval_rate,
+        llm2.evaluate(eval_dataset_dir=valid_data_dir, eval_rate=args.eval_rate, add_more_answers=args.add_more_answers,
                       metrics=['f1', 'precision', 'recall', 'hit@1', 'hit@5', 'recall@20', 'mrr', 'num_nodes'])
     if args.test:
-        llm2.evaluate(eval_dataset_dir=test_data_dir, eval_rate=args.test_rate,
+        llm2.evaluate(eval_dataset_dir=test_data_dir, eval_rate=args.test_rate, add_more_answers=args.add_more_answers,
                       metrics=['f1', 'precision', 'recall', 'hit@1', 'hit@5', 'recall@20', 'mrr', 'num_nodes'])
 
 if __name__ == '__main__':
