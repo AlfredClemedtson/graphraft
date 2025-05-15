@@ -10,7 +10,7 @@ class NER:
         self.model = model
         self.openai_api_key = openai_api_key
 
-        ner_instructions = json.load(open(f"{dataset_name}-data/ner_instructions.json"))
+        ner_instructions = json.load(open(f"../{dataset_name}-data/ner_instructions.json"))
         self.system_instruction = ner_instructions['system_instruction']
         self.multi_shot_examples = ner_instructions['multi_shot_examples']
         self.labels = ner_instructions['labels']
@@ -27,9 +27,10 @@ class NER:
             )
 
 
-    def find_source_nodes(self, question: str, driver: Driver):
+    def find_source_nodes(self, question: str, driver: Driver, do_print=True):
         named_entities = self._identify_unlabeled_entities(question) if self.labels is None else self._identify_labeled_entities(question)
-        print("Identified by LLM: ", named_entities)
+        if do_print:
+            print("Identified by LLM: ", named_entities)
 
         matched_nodes = self._match_labeled_entities(driver=driver, entities=named_entities)
         return matched_nodes
