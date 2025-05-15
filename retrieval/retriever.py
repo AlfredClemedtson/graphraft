@@ -1,4 +1,5 @@
 from neo4j import Driver
+from neo4j.exceptions import ClientError
 
 def extract_from_query(query: str):
     tgt = query.split("RETURN DISTINCT ")[1].split(".")[0]  # ... RETURN tgtVarName.name,...  --> tgtVarName  #Replace with regex
@@ -92,7 +93,10 @@ class Retriever:
                         continue
                     break #To break outer if inner is broken not finished
             except Exception as e:
-                print(e)
+                if type(e) is ClientError:
+                    print("timeout?")
+                else:
+                    print(e)
         with driver.session() as session:
             cypher_query = self.modify_query(VECTOR_SIMILARITY_QUERY, vector_sim=True)
             for rec in session.run(cypher_query,
