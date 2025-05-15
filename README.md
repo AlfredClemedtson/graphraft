@@ -1,14 +1,5 @@
-# GraphRAFT
-
-Codebase for [GraphRAFT: Retrieval Augmented Fine-Tuning for Knowledge Graphs on Graph Databases](https://arxiv.org/abs/2504.05478)
-
 ## Setup
-
 [Installing Neo4j](https://neo4j.com/docs/operations-manual/current/installation/)
-
-[Loading a database dump - Neo4j](https://neo4j.com/docs/operations-manual/current/backup-restore/restore-dump/)\
-`https://gds-public-dataset.s3.us-east-1.amazonaws.com/prime.dump` \
-`https://gds-public-dataset.s3.us-east-1.amazonaws.com/mag.dump`
 
 
 ## Inference
@@ -24,17 +15,3 @@ Codebase for [GraphRAFT: Retrieval Augmented Fine-Tuning for Knowledge Graphs on
 5. Preprocess retrieval in `training/generate_training_data.ipynb`
 6. Train LLM2: `python llm2.py --dataset [] --train`
 7. Evaluate pipeline:  `python llm2.py --dataset [] --adapter_dir [] --test --add_more_answers`
-
-## Reference
-To cite our work, please use
-```
-@misc{graphraft,
-      title={GraphRAFT: Retrieval Augmented Fine-Tuning for Knowledge Graphs on Graph Databases}, 
-      author={Alfred Clemedtson and Borun Shi},
-      year={2025},
-      eprint={2504.05478},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2504.05478}, 
-}
-```
